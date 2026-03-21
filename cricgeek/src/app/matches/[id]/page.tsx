@@ -4,10 +4,11 @@ import {
   getMatchCommentary,
   getMatchSquad,
 } from "@/lib/cricket-api";
+import { getSMFixture, isSportMonksConfigured } from "@/lib/sportmonks";
 import MatchDetailClient from "./MatchDetailClient";
 import type { Metadata } from "next";
 
-export const revalidate = 30;
+export const revalidate = 20;
 
 type PageProps = {
   params: Promise<{ id: string }>;
@@ -15,7 +16,9 @@ type PageProps = {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params;
-  const match = await getMatchInfo(id);
+  const match = isSportMonksConfigured()
+    ? await getSMFixture(id) ?? await getMatchInfo(id)
+    : await getMatchInfo(id);
   return {
     title: match ? `${match.name} | CricGeek` : "Match Details | CricGeek",
     description: match?.status || "Live cricket match details and scorecard",
@@ -25,12 +28,16 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 export default async function MatchDetailPage({ params }: PageProps) {
   const { id } = await params;
 
-  const [match, scorecard, commentary, squads] = await Promise.all([
-    getMatchInfo(id),
+  // SportMonks provides match data directly; supplement with CricAPI for scorecard/commentary
+  const [smMatch, scorecard, commentary, squads] = await Promise.all([
+    isSportMonksConfigured() ? getSMFixture(id) : null,
     getMatchScorecard(id),
     getMatchCommentary(id),
     getMatchSquad(id),
   ]);
+
+  const match = smMatch ?? await getMatchInfo(id);
+
 
   if (!match) {
     return (

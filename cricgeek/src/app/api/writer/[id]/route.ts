@@ -7,7 +7,7 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    
+
     const user = await prisma.user.findUnique({
       where: { id },
       select: {
@@ -33,6 +33,7 @@ export async function GET(
             title: true,
             slug: true,
             views: true,
+            runs: true,
             createdAt: true,
             score: {
               select: { bqs: true },
@@ -52,12 +53,26 @@ export async function GET(
       avatar: user.avatar,
       bio: user.bio,
       createdAt: user.createdAt,
-      profile: user.writerProfile || {
-        averageBQS: 0, totalBlogs: 0, totalViews: 0, archetype: "rookie",
-        level: 1, xp: 0, bestBQS: 0, featuredCount: 0, streak: 0, bcs: 0,
+      profile: user.writerProfile ?? {
+        averageBQS: 0,
+        totalBlogs: 0,
+        totalViews: 0,
+        totalRuns: 0,
+        archetype: "fan",
+        writerTitle: "",
+        level: 1,
+        xp: 0,
+        bestBQS: 0,
+        featuredCount: 0,
+        streak: 0,
+        bcs: 0,
+        statAccuracy: 0,
       },
-      dna: user.writerDNA || {
-        analyst: 50, storyteller: 50, critic: 50, reporter: 50, debater: 50,
+      dna: user.writerDNA ?? {
+        analyst: 25,
+        fan: 25,
+        storyteller: 25,
+        debater: 25,
       },
       badges: user.badges,
       achievements: user.achievements,

@@ -5,6 +5,7 @@ import Link from "next/link";
 import { PenSquare, Clock, Eye, MessageSquare, Search, Trophy, TrendingUp } from "lucide-react";
 import AdSlot from "@/components/ads/AdSlot";
 import WriterProfileCard from "@/components/writer/WriterProfileCard";
+import { ARCHETYPE_META } from "@/lib/scoring";
 
 interface Blog {
   id: string;
@@ -13,6 +14,7 @@ interface Blog {
   slug: string;
   tags: string;
   views: number;
+  runs: number;
   createdAt: string;
   author: { id: string; name: string; avatar: string | null };
   _count: { comments: number };
@@ -56,6 +58,7 @@ export default function BlogPage() {
           slug: "bumrah-best-fast-bowler",
           tags: "analysis,india,test-cricket",
           views: 1250,
+          runs: 47,
           createdAt: new Date().toISOString(),
           author: { id: "1", name: "CricAnalyst Pro", avatar: null },
           _count: { comments: 24 },
@@ -68,6 +71,7 @@ export default function BlogPage() {
           slug: "ipl-2026-auction-analysis",
           tags: "ipl,auction,analysis",
           views: 890,
+          runs: 31,
           createdAt: new Date(Date.now() - 86400000).toISOString(),
           author: { id: "2", name: "TheCricStoryteller", avatar: null },
           _count: { comments: 15 },
@@ -80,10 +84,11 @@ export default function BlogPage() {
           slug: "spin-bowling-t20",
           tags: "t20,bowling,analysis",
           views: 670,
+          runs: 19,
           createdAt: new Date(Date.now() - 172800000).toISOString(),
           author: { id: "3", name: "SpinWizard", avatar: null },
           _count: { comments: 8 },
-          score: { bqs: 72, archetypeLabel: "reporter" },
+          score: { bqs: 72, archetypeLabel: "fan" },
         },
         {
           id: "4",
@@ -92,6 +97,7 @@ export default function BlogPage() {
           slug: "kohli-vs-root-2026",
           tags: "debate,test-cricket,batting",
           views: 1890,
+          runs: 82,
           createdAt: new Date(Date.now() - 259200000).toISOString(),
           author: { id: "1", name: "CricAnalyst Pro", avatar: null },
           _count: { comments: 42 },
@@ -199,19 +205,25 @@ export default function BlogPage() {
                         >
                           {blog.author.name}
                         </Link>
-                        {blog.score?.archetypeLabel && (
-                          <span className="bg-gray-800 text-gray-400 px-2 py-0.5 rounded-full text-[10px] capitalize">
-                            {blog.score.archetypeLabel}
-                          </span>
-                        )}
+                        {blog.score?.archetypeLabel && (() => {
+                          const meta = ARCHETYPE_META[blog.score.archetypeLabel];
+                          return meta ? (
+                            <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${meta.bgColor} ${meta.color}`}>
+                              {meta.icon} {meta.label}
+                            </span>
+                          ) : null;
+                        })()}
                         <span className="flex items-center gap-1">
                           <Clock size={12} />
                           {new Date(blog.createdAt).toLocaleDateString()}
                         </span>
                         <span className="flex items-center gap-1">
-                          <Eye size={12} />
-                          {blog.views}
-                        </span>
+                           <Eye size={12} />
+                           {blog.views}
+                         </span>
+                         <span className="flex items-center gap-1 text-orange-400">
+                           🏏 {blog.runs ?? 0}
+                         </span>
                         <span className="flex items-center gap-1">
                           <MessageSquare size={12} />
                           {blog._count.comments}

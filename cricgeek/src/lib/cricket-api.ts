@@ -1,4 +1,5 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
+import { getSMLivescores, getSMUpcoming, isSportMonksConfigured } from "@/lib/sportmonks";
 
 const API_KEY = process.env.CRICKET_API_KEY || "";
 const BASE_URL = process.env.CRICKET_API_BASE_URL || "https://api.cricapi.com/v1";
@@ -23,7 +24,7 @@ async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}
     });
 
     const res = await fetch(url.toString(), {
-      next: { revalidate: 30 }, // Cache for 30 seconds for live data
+      next: { revalidate: 30 },
     });
 
     if (!res.ok) {
@@ -45,11 +46,28 @@ async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}
   }
 }
 
-// Get current/live matches
+// Get current/live matches — SportMonks → CricAPI → Mock
 export async function getLiveMatches(): Promise<Match[]> {
-  const data = await fetchApi<Match[]>("currentMatches");
-  return data || getMockLiveMatches();
+  // 1. Try SportMonks (primary)
+  if (isSportMonksConfigured()) {
+    const smMatches = await getSMLivescores();
+    if (smMatches && smMatches.length > 0) return smMatches;
+
+    // Try upcoming too so we always have something to show
+    const smUpcoming = await getSMUpcoming();
+    if (smUpcoming && smUpcoming.length > 0) return smUpcoming;
+  }
+
+  // 2. Fall back to CricAPI
+  if (API_KEY) {
+    const data = await fetchApi<Match[]>("currentMatches");
+    if (data && data.length > 0) return data;
+  }
+
+  // 3. Fall back to mock data
+  return getMockLiveMatches();
 }
+
 
 // Get match info by ID
 export async function getMatchInfo(matchId: string): Promise<Match | null> {

@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { runScoringPipeline, calculateDNAUpdate, BADGE_DEFINITIONS, ACHIEVEMENT_DEFINITIONS } from "@/lib/scoring";
+import {
+  runScoringPipeline,
+  calculateDNAUpdate,
+  calculateWriterTitle,
+  calculateBCS,
+  BADGE_DEFINITIONS,
+  ACHIEVEMENT_DEFINITIONS,
+  DNA_ACHIEVEMENT_DEFINITIONS,
+  type WriterDNA,
+} from "@/lib/scoring";
 
 export async function POST(req: NextRequest) {
   try {
@@ -19,17 +28,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Blog not found" }, { status: 404 });
     }
 
-    // Update processing status
+    // Mark as processing
     await prisma.blogScore.upsert({
       where: { blogId },
       create: { blogId, processingStatus: "processing" },
       update: { processingStatus: "processing" },
     });
 
-    // Run the 7-step scoring pipeline
+    // ── Run the 7-step scoring pipeline ─────────────────────────────
     const result = await runScoringPipeline(blog.content);
 
-    // Save the blog score
+    // ── Save BlogScore ───────────────────────────────────────────────
     const blogScore = await prisma.blogScore.upsert({
       where: { blogId },
       create: {
@@ -85,85 +94,169 @@ export async function POST(req: NextRequest) {
       },
     });
 
-    // Update or create writer profile
-    const writerProfile = await prisma.writerProfile.upsert({
+    // ── Update or create WriterProfile ──────────────────────────────
+    const existingProfile = await prisma.writerProfile.findUnique({
+      where: { userId: blog.authorId },
+    });
+
+    // Recalculate average BQS across all blogs
+    const allScores = await prisma.blogScore.findMany({
+      where: { blog: { authorId: blog.authorId } },
+      select: { bqs: true, statAccuracy: true, infoDensity: true },
+    });
+    const avgBQS = allScores.reduce((sum, s) => sum + s.bqs, 0) / allScores.length;
+    const avgStatAccuracy =
+      allScores.reduce((sum, s) => sum + s.statAccuracy, 0) / allScores.length;
+    const avgDepth = allScores.reduce((sum, s) => sum + s.infoDensity, 0) / allScores.length;
+
+    // Streak stays as-is for now (incremented separately via weekly job)
+    const streak = existingProfile?.streak ?? 0;
+    const consistencyScore = Math.min(100, streak * 15);
+    const prevRuns = existingProfile?.totalRuns ?? 0;
+    // Normalize community engagement: runs / max(views, 1) normalized to 0-100
+    const prevViews = existingProfile?.totalViews ?? 0;
+    const communityScore = Math.min(100, (prevRuns / Math.max(prevViews, 1)) * 100);
+
+    const newBCS = calculateBCS(avgBQS, avgDepth, communityScore, consistencyScore, avgStatAccuracy);
+
+    const newXP = (existingProfile?.xp ?? 0) + Math.round(result.bqs / 2);
+    const level = Math.floor(newXP / 100) + 1;
+
+    await prisma.writerProfile.upsert({
       where: { userId: blog.authorId },
       create: {
         userId: blog.authorId,
-        averageBQS: result.bqs,
+        averageBQS: Math.round(avgBQS * 10) / 10,
         totalBlogs: 1,
         archetype: result.modelScores.archetypeLabel,
+        writerTitle: calculateWriterTitle({ analyst: 25, fan: 25, storyteller: 25, debater: 25 }),
         bestBQS: result.bqs,
+        bcs: newBCS,
+        statAccuracy: avgStatAccuracy,
+        xp: newXP,
+        level,
       },
       update: {
         totalBlogs: { increment: 1 },
-        averageBQS: result.bqs, // Will be recalculated below
+        averageBQS: Math.round(avgBQS * 10) / 10,
         archetype: result.modelScores.archetypeLabel,
-        bestBQS: Math.max(result.bqs),
-        xp: { increment: Math.round(result.bqs / 2) },
+        bestBQS: { set: Math.max(existingProfile?.bestBQS ?? 0, result.bqs) },
+        bcs: newBCS,
+        statAccuracy: Math.round(avgStatAccuracy * 10) / 10,
+        xp: newXP,
+        level,
       },
     });
 
-    // Recalculate average BQS
-    const allScores = await prisma.blogScore.findMany({
-      where: { blog: { authorId: blog.authorId } },
-      select: { bqs: true },
-    });
-    const avgBQS = allScores.reduce((sum, s) => sum + s.bqs, 0) / allScores.length;
-    const level = Math.floor(writerProfile.xp / 100) + 1;
-
-    await prisma.writerProfile.update({
-      where: { userId: blog.authorId },
-      data: { averageBQS: Math.round(avgBQS * 10) / 10, level },
-    });
-
-    // Update Writer DNA
+    // ── Update Writer DNA (4-archetype 80/20 EMA) ───────────────────
     const currentDNA = await prisma.writerDNA.upsert({
       where: { userId: blog.authorId },
       create: { userId: blog.authorId },
       update: {},
     });
-    const newDNA = calculateDNAUpdate(
-      { analyst: currentDNA.analyst, storyteller: currentDNA.storyteller, critic: currentDNA.critic, reporter: currentDNA.reporter, debater: currentDNA.debater },
-      result.modelScores.archetypeLabel,
-      result.bqs,
-    );
+
+    const prevDNA: WriterDNA = {
+      analyst: currentDNA.analyst,
+      fan: currentDNA.fan,
+      storyteller: currentDNA.storyteller,
+      debater: currentDNA.debater,
+    };
+
+    const newDNA = calculateDNAUpdate(prevDNA, result.modelScores.archetypeLabel, result.bqs);
+    const writerTitle = calculateWriterTitle(newDNA);
+
     await prisma.writerDNA.update({
       where: { userId: blog.authorId },
       data: newDNA,
     });
 
-    // Check badges
-    const existingBadges = await prisma.writerBadge.findMany({ where: { userId: blog.authorId } });
-    const earnedBadgeIds = existingBadges.map(b => b.badge);
+    // Save updated writerTitle
+    await prisma.writerProfile.update({
+      where: { userId: blog.authorId },
+      data: { writerTitle },
+    });
 
-    // First Blood
-    if (!earnedBadgeIds.includes('first_blood') && allScores.length >= 1) {
-      const def = BADGE_DEFINITIONS.find(b => b.id === 'first_blood')!;
-      await prisma.writerBadge.create({ data: { userId: blog.authorId, badge: def.id, title: def.title, description: def.description, tier: def.tier } });
+    // ── Check Badges ─────────────────────────────────────────────────
+    const existingBadges = await prisma.writerBadge.findMany({
+      where: { userId: blog.authorId },
+    });
+    const earnedBadgeIds = existingBadges.map((b) => b.badge);
+    const totalBlogs = allScores.length;
+    const highScores80 = allScores.filter((s) => s.bqs >= 80).length;
+
+    const badgesToAward = BADGE_DEFINITIONS.filter((def) => {
+      if (earnedBadgeIds.includes(def.id)) return false;
+      if (def.id === "first_blood" || def.id === "bronze_scribe") return totalBlogs >= 1;
+      if (def.id === "silver_analyst") return totalBlogs >= 5 && avgBQS >= 55;
+      if (def.id === "gold_correspondent") return totalBlogs >= 10 && avgBQS >= 70 && avgStatAccuracy >= 75;
+      if (def.id === "diamond_expert") return totalBlogs >= 20 && avgBQS >= 80 && avgStatAccuracy >= 85;
+      if (def.id === "five_wickets") return highScores80 >= 5;
+      if (def.id === "mr_consistent") return streak >= 4;
+      return false;
+    });
+
+    for (const def of badgesToAward) {
+      await prisma.writerBadge.create({
+        data: {
+          userId: blog.authorId,
+          badge: def.id,
+          title: def.title,
+          description: def.description,
+          tier: def.tier,
+        },
+      });
     }
 
-    // Five-For: 5 blogs above 80
-    if (!earnedBadgeIds.includes('five_wickets')) {
-      const highScores = allScores.filter(s => s.bqs >= 80).length;
-      if (highScores >= 5) {
-        const def = BADGE_DEFINITIONS.find(b => b.id === 'five_wickets')!;
-        await prisma.writerBadge.create({ data: { userId: blog.authorId, badge: def.id, title: def.title, description: def.description, tier: def.tier } });
-      }
-    }
-
-    // Check achievements
-    const existingAchievements = await prisma.writerAchievement.findMany({ where: { userId: blog.authorId } });
-    const earnedAchIds = existingAchievements.map(a => a.achievement);
+    // ── Check Achievements ───────────────────────────────────────────
+    const existingAchievements = await prisma.writerAchievement.findMany({
+      where: { userId: blog.authorId },
+    });
+    const earnedAchIds = existingAchievements.map((a) => a.achievement);
+    const totalViews = existingProfile?.totalViews ?? 0;
 
     for (const achDef of ACHIEVEMENT_DEFINITIONS) {
       if (earnedAchIds.includes(achDef.id)) continue;
       let earned = false;
-      if (achDef.id.startsWith('blogs_') && allScores.length >= achDef.milestone) earned = true;
-      if (achDef.id.startsWith('bqs_') && avgBQS >= achDef.milestone) earned = true;
+      if (achDef.id.startsWith("blogs_") && totalBlogs >= achDef.milestone) earned = true;
+      if (achDef.id.startsWith("bqs_") && avgBQS >= achDef.milestone) earned = true;
+      if (achDef.id.startsWith("views_") && totalViews >= achDef.milestone) earned = true;
       if (earned) {
         await prisma.writerAchievement.create({
-          data: { userId: blog.authorId, achievement: achDef.id, title: achDef.title, description: achDef.description, milestone: achDef.milestone },
+          data: {
+            userId: blog.authorId,
+            achievement: achDef.id,
+            title: achDef.title,
+            description: achDef.description,
+            milestone: achDef.milestone,
+          },
+        });
+      }
+    }
+
+    // ── Check DNA Achievements ───────────────────────────────────────
+    const totalDNA = newDNA.analyst + newDNA.fan + newDNA.storyteller + newDNA.debater;
+    for (const dnaAch of DNA_ACHIEVEMENT_DEFINITIONS) {
+      if (earnedAchIds.includes(dnaAch.id)) continue;
+      if (totalBlogs < dnaAch.minBlogs) continue;
+      let earned = false;
+      if (dnaAch.archetype === "all") {
+        const minVal = Math.min(newDNA.analyst, newDNA.fan, newDNA.storyteller, newDNA.debater);
+        const minPct = totalDNA > 0 ? (minVal / totalDNA) * 100 : 0;
+        earned = minPct >= dnaAch.threshold;
+      } else {
+        const archetypeVal = newDNA[dnaAch.archetype as keyof WriterDNA] ?? 0;
+        const archetypePct = totalDNA > 0 ? (archetypeVal / totalDNA) * 100 : 0;
+        earned = archetypePct >= dnaAch.threshold;
+      }
+      if (earned) {
+        await prisma.writerAchievement.create({
+          data: {
+            userId: blog.authorId,
+            achievement: dnaAch.id,
+            title: dnaAch.title,
+            description: dnaAch.description,
+            milestone: dnaAch.minBlogs,
+          },
         });
       }
     }
@@ -173,6 +266,8 @@ export async function POST(req: NextRequest) {
       score: blogScore,
       bqs: result.bqs,
       archetype: result.modelScores.archetypeLabel,
+      writerTitle,
+      bcs: newBCS,
     });
   } catch (error) {
     console.error("Scoring pipeline error:", error);

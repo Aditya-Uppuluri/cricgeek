@@ -7,6 +7,7 @@ import {
   Menu,
   X,
   Zap,
+  Radio,
   Calendar,
   PenSquare,
   Shield,
@@ -19,6 +20,7 @@ import {
 
 const navLinks = [
   { href: "/matches", label: "Live Matches", icon: Zap },
+  { href: "/commentary", label: "Commentary", icon: Radio },
   { href: "/calendar", label: "Calendar", icon: Calendar },
   { href: "/blog", label: "Community", icon: PenSquare },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },

@@ -195,3 +195,16 @@ main {
   );
   transition: --over-progress 0.3s ease;
 }
+
+/* Commentary slide-in animation */
+@keyframes fadeSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+

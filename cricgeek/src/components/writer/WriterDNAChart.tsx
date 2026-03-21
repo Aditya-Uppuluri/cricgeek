@@ -2,29 +2,28 @@
 
 interface WriterDNAChartProps {
   analyst: number;
+  fan: number;
   storyteller: number;
-  critic: number;
-  reporter: number;
   debater: number;
   size?: number;
 }
 
 export default function WriterDNAChart({
   analyst,
+  fan,
   storyteller,
-  critic,
-  reporter,
   debater,
   size = 280,
 }: WriterDNAChartProps) {
   const center = size / 2;
-  const radius = size * 0.38;
+  const radius = size * 0.36;
+
+  // 4-axis diamond layout (top, right, bottom, left)
   const dimensions = [
-    { label: "Analyst", value: analyst, angle: -90, icon: "📊" },
-    { label: "Storyteller", value: storyteller, angle: -18, icon: "📖" },
-    { label: "Debater", value: debater, angle: 54, icon: "⚔️" },
-    { label: "Reporter", value: reporter, angle: 126, icon: "📰" },
-    { label: "Critic", value: critic, angle: 198, icon: "🔍" },
+    { label: "Analyst",     value: analyst,     angle: -90,  icon: "📊", color: "#3b82f6" },
+    { label: "Debater",     value: debater,     angle: 0,    icon: "⚔️",  color: "#ef4444" },
+    { label: "Storyteller", value: storyteller, angle: 90,   icon: "📖", color: "#a855f7" },
+    { label: "Fan",         value: fan,         angle: 180,  icon: "🔥", color: "#f97316" },
   ];
 
   const getPoint = (angle: number, value: number, maxRadius: number) => {
@@ -33,13 +32,9 @@ export default function WriterDNAChart({
     return { x: center + r * Math.cos(rad), y: center + r * Math.sin(rad) };
   };
 
-  // Grid rings
-  const rings = [20, 40, 60, 80, 100];
+  const rings = [25, 50, 75, 100];
 
-  // Data polygon points
-  const dataPoints = dimensions.map((d) =>
-    getPoint(d.angle, d.value, radius)
-  );
+  const dataPoints = dimensions.map((d) => getPoint(d.angle, d.value, radius));
   const dataPolygon = dataPoints.map((p) => `${p.x},${p.y}`).join(" ");
 
   return (
@@ -47,18 +42,14 @@ export default function WriterDNAChart({
       <svg viewBox={`0 0 ${size} ${size}`} className="w-full h-full">
         {/* Grid rings */}
         {rings.map((ring) => {
-          const ringPoints = dimensions.map((d) =>
-            getPoint(d.angle, ring, radius)
-          );
-          const ringPolygon = ringPoints
-            .map((p) => `${p.x},${p.y}`)
-            .join(" ");
+          const ringPoints = dimensions.map((d) => getPoint(d.angle, ring, radius));
+          const ringPolygon = ringPoints.map((p) => `${p.x},${p.y}`).join(" ");
           return (
             <polygon
               key={ring}
               points={ringPolygon}
               fill="none"
-              stroke="rgba(255,255,255,0.08)"
+              stroke={ring === 100 ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.06)"}
               strokeWidth="1"
             />
           );
@@ -74,7 +65,7 @@ export default function WriterDNAChart({
               y1={center}
               x2={end.x}
               y2={end.y}
-              stroke="rgba(255,255,255,0.06)"
+              stroke="rgba(255,255,255,0.08)"
               strokeWidth="1"
             />
           );
@@ -83,7 +74,7 @@ export default function WriterDNAChart({
         {/* Data fill */}
         <polygon
           points={dataPolygon}
-          fill="rgba(34,197,94,0.15)"
+          fill="rgba(34,197,94,0.12)"
           stroke="#22C55E"
           strokeWidth="2"
           className="radar-pulse"
@@ -96,7 +87,7 @@ export default function WriterDNAChart({
             cx={p.x}
             cy={p.y}
             r="4"
-            fill="#22C55E"
+            fill={dimensions[i].color}
             stroke="#0A0A0A"
             strokeWidth="2"
           />
@@ -106,6 +97,8 @@ export default function WriterDNAChart({
       {/* Labels */}
       {dimensions.map((d) => {
         const labelPoint = getPoint(d.angle, 125, radius);
+        const total = analyst + fan + storyteller + debater;
+        const pct = total > 0 ? Math.round((d.value / total) * 100) : 25;
         return (
           <div
             key={d.label}
@@ -120,7 +113,9 @@ export default function WriterDNAChart({
             <span className="text-[10px] text-gray-400 font-medium whitespace-nowrap">
               {d.label}
             </span>
-            <span className="text-xs font-bold text-cg-green">{d.value}</span>
+            <span className="text-xs font-bold" style={{ color: d.color }}>
+              {pct}%
+            </span>
           </div>
         );
       })}

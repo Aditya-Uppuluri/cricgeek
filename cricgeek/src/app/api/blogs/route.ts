@@ -9,17 +9,31 @@ export async function GET(req: NextRequest) {
     const limit = parseInt(searchParams.get("limit") || "10");
     const tag = searchParams.get("tag");
 
+    const archetype = searchParams.get("archetype");
+
     const where: Record<string, unknown> = { status: "approved" };
     if (tag) {
       where.tags = { contains: tag };
+    }
+    if (archetype && ["analyst", "fan", "storyteller", "debater"].includes(archetype)) {
+      where.score = { archetypeLabel: archetype };
     }
 
     const [blogs, total] = await Promise.all([
       prisma.blog.findMany({
         where,
-        include: {
+        select: {
+          id: true,
+          title: true,
+          excerpt: true,
+          slug: true,
+          tags: true,
+          views: true,
+          runs: true,
+          createdAt: true,
           author: { select: { id: true, name: true, avatar: true } },
           _count: { select: { comments: true } },
+          score: { select: { bqs: true, archetypeLabel: true } },
         },
         orderBy: { createdAt: "desc" },
         skip: (page - 1) * limit,
