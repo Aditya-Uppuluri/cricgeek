@@ -14,22 +14,11 @@ interface WriterData {
   avatar: string | null;
   bio: string | null;
   createdAt: string;
-  profile: {
-    averageBQS: number;
-    totalBlogs: number;
-    totalViews: number;
-    archetype: string;
-    level: number;
-    xp: number;
-    bestBQS: number;
-    featuredCount: number;
-    streak: number;
-    bcs: number;
-  };
-  dna: { analyst: number; storyteller: number; critic: number; reporter: number; debater: number };
+  profile: { averageBQS: number; totalBlogs: number; totalViews: number; totalRuns: number; archetype: string; writerTitle: string; level: number; xp: number; bestBQS: number; featuredCount: number; streak: number; bcs: number; statAccuracy: number };
+  dna: { analyst: number; fan: number; storyteller: number; debater: number };
   badges: { badge: string; title: string; description: string; tier: string; earnedAt: string }[];
   achievements: { achievement: string; title: string; description: string; milestone: number; earnedAt: string }[];
-  recentBlogs: { id: string; title: string; slug: string; views: number; createdAt: string; score: { bqs: number } | null }[];
+  recentBlogs: { id: string; title: string; slug: string; views: number; runs: number; createdAt: string; score: { bqs: number } | null }[];
 }
 
 const TIER_COLORS: Record<string, string> = {
@@ -46,8 +35,8 @@ const DEMO_WRITER: WriterData = {
   avatar: null,
   bio: "Passionate cricket analyst covering all formats. Specializing in batting technique analysis and match predictions.",
   createdAt: new Date(Date.now() - 90 * 86400000).toISOString(),
-  profile: { averageBQS: 74.5, totalBlogs: 12, totalViews: 3420, archetype: "analyst", level: 5, xp: 480, bestBQS: 92, featuredCount: 2, streak: 3, bcs: 82 },
-  dna: { analyst: 85, storyteller: 62, critic: 55, reporter: 70, debater: 48 },
+  profile: { averageBQS: 74.5, totalBlogs: 12, totalViews: 3420, totalRuns: 184, archetype: "analyst", writerTitle: "THE ANALYST", level: 5, xp: 480, bestBQS: 92, featuredCount: 2, streak: 3, bcs: 82, statAccuracy: 81 },
+  dna: { analyst: 85, fan: 55, storyteller: 62, debater: 48 },
   badges: [
     { badge: "first_blood", title: "First Blood", description: "Published your first blog", tier: "bronze", earnedAt: new Date(Date.now() - 80 * 86400000).toISOString() },
     { badge: "stat_master", title: "Stat Master", description: "10+ verified stats across blogs", tier: "silver", earnedAt: new Date(Date.now() - 30 * 86400000).toISOString() },
@@ -61,10 +50,10 @@ const DEMO_WRITER: WriterData = {
     { achievement: "views_1000", title: "Stadium Roar", description: "Total 1000 views", milestone: 1000, earnedAt: new Date(Date.now() - 5 * 86400000).toISOString() },
   ],
   recentBlogs: [
-    { id: "1", title: "Why Bumrah's Yorker is Literally Unplayable", slug: "bumrah-yorker-analysis", views: 890, createdAt: new Date(Date.now() - 2 * 86400000).toISOString(), score: { bqs: 88 } },
-    { id: "2", title: "IPL 2026: Mumbai Indians Auction Strategy Deep Dive", slug: "mi-auction-2026", views: 652, createdAt: new Date(Date.now() - 5 * 86400000).toISOString(), score: { bqs: 76 } },
-    { id: "3", title: "Kohli vs Root: The Definitive Test Comparison", slug: "kohli-vs-root", views: 1120, createdAt: new Date(Date.now() - 12 * 86400000).toISOString(), score: { bqs: 92 } },
-    { id: "4", title: "Spin Bowling in T20s: A Statistical Analysis", slug: "spin-t20-analysis", views: 445, createdAt: new Date(Date.now() - 20 * 86400000).toISOString(), score: { bqs: 71 } },
+    { id: "1", title: "Why Bumrah's Yorker is Literally Unplayable", slug: "bumrah-yorker-analysis", views: 890, runs: 34, createdAt: new Date(Date.now() - 2 * 86400000).toISOString(), score: { bqs: 88 } },
+    { id: "2", title: "IPL 2026: Mumbai Indians Auction Strategy Deep Dive", slug: "mi-auction-2026", views: 652, runs: 21, createdAt: new Date(Date.now() - 5 * 86400000).toISOString(), score: { bqs: 76 } },
+    { id: "3", title: "Kohli vs Root: The Definitive Test Comparison", slug: "kohli-vs-root", views: 1120, runs: 67, createdAt: new Date(Date.now() - 12 * 86400000).toISOString(), score: { bqs: 92 } },
+    { id: "4", title: "Spin Bowling in T20s: A Statistical Analysis", slug: "spin-t20-analysis", views: 445, runs: 11, createdAt: new Date(Date.now() - 20 * 86400000).toISOString(), score: { bqs: 71 } },
   ],
 };
 
@@ -133,6 +122,11 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
           </div>
           <div className="flex-1 min-w-0">
             <h1 className="text-2xl sm:text-3xl font-black text-white">{writer.name}</h1>
+            {writer.profile.writerTitle && (
+              <p className="text-xs font-mono tracking-[0.25em] text-gray-500 mt-0.5">
+                {writer.profile.writerTitle}
+              </p>
+            )}
             <p className={`text-sm ${config.color} flex items-center gap-1.5 mt-1`}>
               <span className="text-lg">{config.icon}</span>
               {config.label}
@@ -167,7 +161,7 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
             { icon: Eye, label: "Total Views", value: writer.profile.totalViews.toLocaleString() },
             { icon: TrendingUp, label: "Best BQS", value: writer.profile.bestBQS },
             { icon: Target, label: "Consistency", value: `${writer.profile.bcs}%` },
-            { icon: Trophy, label: "Featured", value: writer.profile.featuredCount },
+            { icon: Trophy, label: "Runs", value: writer.profile.totalRuns?.toLocaleString() ?? "0" },
             { icon: Award, label: "Badges", value: writer.badges.length },
           ].map((stat) => (
             <div key={stat.label} className="bg-cg-dark-3/50 rounded-lg p-3 text-center">
@@ -188,7 +182,13 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
               🧬 Writer DNA
             </h2>
             <div className="flex justify-center">
-              <WriterDNAChart {...writer.dna} size={250} />
+              <WriterDNAChart
+                analyst={writer.dna.analyst}
+                fan={writer.dna.fan}
+                storyteller={writer.dna.storyteller}
+                debater={writer.dna.debater}
+                size={250}
+              />
             </div>
           </div>
 
@@ -237,27 +237,23 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
               Recent Blogs
             </h2>
             <div className="space-y-3">
-              {writer.recentBlogs.map((blog) => (
+                {writer.recentBlogs.map((blog) => (
                 <Link key={blog.id} href={`/blog/${blog.slug}`} className="block group">
                   <div className="flex items-center gap-4 p-3 rounded-lg hover:bg-cg-dark-3/50 transition-all">
-                    {/* BQS */}
                     {blog.score ? (
                       <div className={`w-10 h-10 rounded-lg flex items-center justify-center text-sm font-bold ${getScoreColor(blog.score.bqs)} bg-cg-dark-3 shrink-0`}>
                         {blog.score.bqs}
                       </div>
                     ) : (
-                      <div className="w-10 h-10 rounded-lg flex items-center justify-center text-xs text-gray-600 bg-cg-dark-3 shrink-0">
-                        —
-                      </div>
+                      <div className="w-10 h-10 rounded-lg flex items-center justify-center text-xs text-gray-600 bg-cg-dark-3 shrink-0">—</div>
                     )}
                     <div className="flex-1 min-w-0">
                       <h3 className="text-sm font-medium text-white truncate group-hover:text-cg-green transition-colors">
                         {blog.title}
                       </h3>
                       <div className="flex items-center gap-3 mt-1 text-[10px] text-gray-500">
-                        <span className="flex items-center gap-1">
-                          <Eye size={10} /> {blog.views}
-                        </span>
+                        <span className="flex items-center gap-1"><Eye size={10} /> {blog.views}</span>
+                        {"runs" in blog && <span className="text-orange-400">🏏 {blog.runs as number}</span>}
                         <span>{new Date(blog.createdAt).toLocaleDateString()}</span>
                       </div>
                     </div>

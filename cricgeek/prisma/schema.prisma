@@ -25,8 +25,9 @@ model User {
   comments      Comment[]
   writerProfile WriterProfile?
   writerDNA     WriterDNA?
-  badges        WriterBadge[]
-  achievements  WriterAchievement[]
+  badges              WriterBadge[]
+  achievements        WriterAchievement[]
+  commentarySessions  LiveCommentarySession[]
 }
 
 model Blog {
@@ -40,6 +41,8 @@ model Blog {
   author      User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   tags        String?   @db.VarChar(500)
   views       Int       @default(0)
+  runs        Int       @default(0)        // Cricket-themed engagement (like upvotes)
+  matchTag    String?   @db.VarChar(100)   // Optional match context tag
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
   comments    Comment[]
@@ -105,12 +108,15 @@ model WriterProfile {
   totalBlogs      Int      @default(0)
   totalViews      Int      @default(0)
   totalComments   Int      @default(0)
-  bcs             Float    @default(0)       // Blog Consistency Score
-  archetype       String   @default("rookie") @db.VarChar(30) // analyst, storyteller, etc.
+  totalRuns       Int      @default(0)       // Total runs received across all blogs
+  bcs             Float    @default(0)       // Blog Consistency Score (0-100)
+  archetype       String   @default("fan") @db.VarChar(30)   // analyst, storyteller, fan, debater
+  writerTitle     String   @default("") @db.VarChar(50)       // THE ANALYST, THE HEARTBEAT, etc.
   level           Int      @default(1)
   xp              Int      @default(0)
   streak          Int      @default(0)       // Consecutive weeks with a blog
   bestBQS         Float    @default(0)
+  statAccuracy    Float    @default(0)       // Average stat accuracy across blogs
   featuredCount   Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -155,11 +161,10 @@ model WriterDNA {
   id          String   @id @default(cuid()) @db.VarChar(30)
   userId      String   @unique @db.VarChar(30)
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  analyst     Float    @default(50)  // Data-driven analysis strength (0-100)
-  storyteller Float    @default(50)  // Narrative/story strength (0-100)
-  critic      Float    @default(50)  // Critical evaluation strength (0-100)
-  reporter    Float    @default(50)  // Factual reporting strength (0-100)
-  debater     Float    @default(50)  // Argumentation strength (0-100)
+  analyst     Float    @default(25)  // Data-driven analysis strength (0-100)
+  fan         Float    @default(25)  // Passion and emotional expression (0-100)
+  storyteller Float    @default(25)  // Narrative/story strength (0-100)
+  debater     Float    @default(25)  // Argumentation strength (0-100)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
@@ -189,4 +194,35 @@ model WriterAchievement {
   earnedAt    DateTime @default(now())
 
   @@unique([userId, achievement])
+}
+
+// ── Live Commentary Module ──────────────────────────────────────────
+
+model LiveCommentarySession {
+  id          String   @id @default(cuid()) @db.VarChar(30)
+  matchId     String   @db.VarChar(100)   // External match ID (e.g. SportMonks)
+  matchName   String   @db.VarChar(200)   // "IND vs AUS - 3rd T20I"
+  matchType   String   @db.VarChar(30)    // T20, ODI, Test
+  status      String   @default("live") @db.VarChar(20) // live, paused, ended
+  moderatorId String   @db.VarChar(30)
+  moderator   User     @relation(fields: [moderatorId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  endedAt     DateTime?
+  entries     LiveCommentaryEntry[]
+
+  @@index([status])
+  @@index([matchId])
+}
+
+model LiveCommentaryEntry {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  sessionId String   @db.VarChar(30)
+  session   LiveCommentarySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  text      String   @db.Text            // Transcribed or typed commentary text
+  overText  String?  @db.VarChar(20)     // e.g. "12.3" — optional over reference
+  source    String   @default("typed") @db.VarChar(10) // "voice" or "typed"
+  createdAt DateTime @default(now())
+
+  @@index([sessionId, createdAt])
 }
