@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 
-const FORMATS = ["All", "T20", "T20I", "ODI", "ODI-W", "Test", "FC"] as const;
+const FORMATS = ["All", "T20", "ODI", "ODI-W", "Test", "FC", "Series"] as const;
 type Format = (typeof FORMATS)[number];
 
 interface FormatFilterProps {

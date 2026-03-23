@@ -1,5 +1,12 @@
 import Link from "next/link";
-import { Zap, Calendar, PenSquare, TrendingUp, ArrowRight, Trophy } from "lucide-react";
+import {
+  Zap,
+  Calendar,
+  PenSquare,
+  TrendingUp,
+  ArrowRight,
+  Trophy,
+} from "lucide-react";
 import LiveMatchCard from "@/components/matches/LiveMatchCard";
 import AdSlot from "@/components/ads/AdSlot";
 import { getLiveMatches } from "@/lib/cricket-api";
@@ -9,8 +16,25 @@ export const revalidate = 30;
 export default async function HomePage() {
   const matches = await getLiveMatches();
   const liveMatches = matches.filter((m) => m.matchStarted && !m.matchEnded);
-  const recentMatches = matches.filter((m) => m.matchEnded).slice(0, 2);
-  const upcomingMatches = matches.filter((m) => !m.matchStarted).slice(0, 2);
+  const completedMatches = matches
+    .filter((m) => m.matchEnded === true)
+    .sort((a, b) => new Date(b.dateTimeGMT || b.date).getTime() - new Date(a.dateTimeGMT || a.date).getTime());
+  // Fall back to recently-started matches if no completed ones are available yet
+  const recentMatches = (
+    completedMatches.length > 0
+      ? completedMatches
+      : matches
+          .filter((m) => m.matchStarted === true)
+          .sort((a, b) => new Date(b.dateTimeGMT || b.date).getTime() - new Date(a.dateTimeGMT || a.date).getTime())
+  ).slice(0, 3);
+  const upcomingMatches = matches
+    .filter((m) => !m.matchStarted)
+    .sort(
+      (a, b) =>
+        new Date(a.dateTimeGMT || a.date).getTime() -
+        new Date(b.dateTimeGMT || b.date).getTime()
+    )
+    .slice(0, 2);
 
   return (
     <div>
@@ -25,19 +49,20 @@ export default async function HomePage() {
               </span>
               {liveMatches.length > 0 && (
                 <span className="text-gray-400 text-xs">
-                  {liveMatches.length} match{liveMatches.length > 1 ? "es" : ""} in progress
+                  {liveMatches.length} match{liveMatches.length > 1 ? "es" : ""}{" "}
+                  in progress
                 </span>
               )}
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-black text-white leading-tight">
-              Cricket.{" "}
-              <span className="text-cg-green">Live.</span>
+              Cricket. <span className="text-cg-green">Live.</span>
               <br />
               Analysed. Discussed.
             </h1>
             <p className="text-gray-400 text-lg mt-4 max-w-xl">
-              Real-time scores, expert analysis, and community-driven discussion.
-              Your ultimate cricket companion for World Cup, IPL, and every international match.
+              Real-time scores, expert analysis, and community-driven
+              discussion. Your ultimate cricket companion for World Cup, IPL,
+              and every international match.
             </p>
             <div className="flex flex-wrap gap-3 mt-8">
               <Link
@@ -67,44 +92,51 @@ export default async function HomePage() {
         </div>
       </section>
 
-      {/* Live Matches */}
-      <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-2">
-            <Zap size={20} className="text-cg-green" />
-            <h2 className="text-xl font-bold text-white">Live Matches</h2>
-            {liveMatches.length > 0 && (
+      {/* Live Matches — only shown when matches are actually live */}
+      {liveMatches.length > 0 && (
+        <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center gap-2">
+              <Zap size={20} className="text-cg-green" />
+              <h2 className="text-xl font-bold text-white">Live Matches</h2>
               <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
-            )}
+            </div>
+            <Link
+              href="/matches"
+              className="text-cg-green text-sm font-medium hover:underline flex items-center gap-1"
+            >
+              View All <ArrowRight size={14} />
+            </Link>
           </div>
-          <Link
-            href="/matches"
-            className="text-cg-green text-sm font-medium hover:underline flex items-center gap-1"
-          >
-            View All <ArrowRight size={14} />
-          </Link>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {(liveMatches.length > 0 ? liveMatches : matches.slice(0, 3)).map(
-            (match) => (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+            {liveMatches.map((match) => (
               <LiveMatchCard key={match.id} match={match} />
-            )
-          )}
-        </div>
-      </section>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Ad placement */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <AdSlot slot="home-top" format="horizontal" className="max-w-3xl mx-auto" />
+        <AdSlot
+          slot="home-top"
+          format="horizontal"
+          className="max-w-3xl mx-auto"
+        />
       </div>
 
       {/* Recent & Upcoming */}
       <section className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
           <div>
-            <div className="flex items-center gap-2 mb-4">
-              <Trophy size={18} className="text-cg-green" />
-              <h2 className="text-lg font-bold text-white">Recent Results</h2>
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <Trophy size={18} className="text-cg-green" />
+                <h2 className="text-lg font-bold text-white">Recent Results</h2>
+              </div>
+              <Link href="/matches?status=completed" className="text-cg-green text-sm font-medium hover:underline flex items-center gap-1">
+                View All <ArrowRight size={14} />
+              </Link>
             </div>
             <div className="space-y-3">
               {recentMatches.map((match) => (
@@ -120,7 +152,7 @@ export default async function HomePage() {
               <Calendar size={18} className="text-cg-green" />
               <h2 className="text-lg font-bold text-white">Upcoming</h2>
             </div>
-            <div className="space-y-3">
+            <div className="gap-2 flex flex-col">
               {upcomingMatches.map((match) => (
                 <LiveMatchCard key={match.id} match={match} />
               ))}
@@ -139,12 +171,31 @@ export default async function HomePage() {
         </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {[
-            { icon: Zap, title: "Live Scores", desc: "Ball-by-ball updates with full scorecards and commentary" },
-            { icon: TrendingUp, title: "Expert Analysis", desc: "Pre-match and post-match analysis from cricket experts" },
-            { icon: PenSquare, title: "Community Blogs", desc: "Share your cricket views and engage with fellow fans" },
-            { icon: Calendar, title: "Match Calendar", desc: "Never miss a match with our complete cricket calendar" },
+            {
+              icon: Zap,
+              title: "Live Scores",
+              desc: "Ball-by-ball updates with full scorecards and commentary",
+            },
+            {
+              icon: TrendingUp,
+              title: "Expert Analysis",
+              desc: "Pre-match and post-match analysis from cricket experts",
+            },
+            {
+              icon: PenSquare,
+              title: "Community Blogs",
+              desc: "Share your cricket views and engage with fellow fans",
+            },
+            {
+              icon: Calendar,
+              title: "Match Calendar",
+              desc: "Never miss a match with our complete cricket calendar",
+            },
           ].map((feature) => (
-            <div key={feature.title} className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 hover:border-cg-green/30 transition-all">
+            <div
+              key={feature.title}
+              className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 hover:border-cg-green/30 transition-all"
+            >
               <feature.icon size={24} className="text-cg-green mb-3" />
               <h3 className="text-white font-semibold mb-1">{feature.title}</h3>
               <p className="text-gray-400 text-sm">{feature.desc}</p>
@@ -155,7 +206,11 @@ export default async function HomePage() {
 
       {/* Bottom Ad */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-        <AdSlot slot="home-bottom" format="horizontal" className="max-w-3xl mx-auto" />
+        <AdSlot
+          slot="home-bottom"
+          format="horizontal"
+          className="max-w-3xl mx-auto"
+        />
       </div>
     </div>
   );

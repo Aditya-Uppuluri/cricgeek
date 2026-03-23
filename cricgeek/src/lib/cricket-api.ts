@@ -1,5 +1,6 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
 import { getSMLivescores, getSMUpcoming, isSportMonksConfigured } from "@/lib/sportmonks";
+import { getCurrentMatches, getSeriesMatches, isCricApiConfigured, isCricApiKeySet } from "@/services/cricapi";
 
 const API_KEY = process.env.CRICKET_API_KEY || "";
 const BASE_URL = process.env.CRICKET_API_BASE_URL || "https://api.cricapi.com/v1";
@@ -46,22 +47,35 @@ async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}
   }
 }
 
-// Get current/live matches — SportMonks → CricAPI → Mock
+// Get current/live matches — SportMonks → CricAPI (current + series merged) → Mock
 export async function getLiveMatches(): Promise<Match[]> {
   // 1. Try SportMonks (primary)
   if (isSportMonksConfigured()) {
     const smMatches = await getSMLivescores();
     if (smMatches && smMatches.length > 0) return smMatches;
 
-    // Try upcoming too so we always have something to show
     const smUpcoming = await getSMUpcoming();
     if (smUpcoming && smUpcoming.length > 0) return smUpcoming;
   }
 
-  // 2. Fall back to CricAPI
-  if (API_KEY) {
-    const data = await fetchApi<Match[]>("currentMatches");
-    if (data && data.length > 0) return data;
+  // 2. CricAPI — fetch currentMatches AND series_info in parallel, then merge.
+  //    currentMatches  → today's live matches with real scores
+  //    series_info     → full fixture list for the pinned series (upcoming/past)
+  //    Merged result covers live NOW + upcoming fixtures in one array.
+  if (isCricApiKeySet()) {
+    const [current, series] = await Promise.all([
+      getCurrentMatches(),
+      isCricApiConfigured() ? getSeriesMatches() : Promise.resolve([]),
+    ]);
+
+    // Deduplicate: currentMatches (live scores) take priority over series_info
+    const seen = new Set<string>();
+    const merged: Match[] = [];
+
+    for (const m of current) { seen.add(m.id); merged.push(m); }
+    for (const m of series)  { if (!seen.has(m.id)) merged.push(m); }
+
+    if (merged.length > 0) return merged;
   }
 
   // 3. Fall back to mock data
