@@ -60,8 +60,11 @@ export default function LiveMatchCard({ match }: LiveMatchCardProps) {
     return matches?.[matches.length - 1];
   };
 
-  const s0 = match.score?.[0];
-  const s1 = match.score?.[1];
+  // Only show score if at least one inning has actual data (r > 0 or o > 0)
+  // series_info returns completed matches with empty score arrays
+  const hasScoreData = match.score?.some((s) => s.r > 0 || s.o > 0) ?? false;
+  const s0 = hasScoreData ? match.score?.[0] : undefined;
+  const s1 = hasScoreData ? match.score?.[1] : undefined;
 
   return (
     <Link href={`/matches/${match.id}`}>
@@ -76,7 +79,7 @@ export default function LiveMatchCard({ match }: LiveMatchCardProps) {
       >
         {/* Live glow */}
         {isLive && (
-          <div className="absolute inset-0 bg-gradient-to-b from-red-500/5 to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-linear-to-b from-red-500/5 to-transparent pointer-events-none" />
         )}
 
         {/* Header row */}
@@ -132,6 +135,14 @@ export default function LiveMatchCard({ match }: LiveMatchCardProps) {
           {match.venue && (
             <p className="text-[10px] text-gray-600 truncate flex items-center gap-1">
               {match.venue}
+            </p>
+          )}
+          {isCompleted && (match.dateTimeGMT || match.date) && (
+            <p className="text-[10px] text-gray-600 flex items-center gap-1">
+              <CalendarDays size={9} />
+              {new Date(match.dateTimeGMT || match.date).toLocaleDateString("en-IN", {
+                day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata",
+              })}
             </p>
           )}
         </div>

@@ -9,26 +9,38 @@
  */
 import { NextResponse } from "next/server";
 import { getSMLivescores, getSMUpcoming, isSportMonksConfigured } from "@/lib/sportmonks";
-import { getLiveMatches } from "@/lib/cricket-api";
+import { getCurrentMatches, getSeriesMatches, isCricApiConfigured, isCricApiKeySet } from "@/services/cricapi";
 
-export const dynamic = "force-dynamic";   // Always fresh — never statically cached
+export const dynamic = "force-dynamic"; // Always fresh — never statically cached
 
 export async function GET() {
   try {
     let matches;
+    let source: string;
 
     if (isSportMonksConfigured()) {
+      // SportMonks: primary real-time source
       const live = await getSMLivescores();
       const upcoming = live && live.length > 0 ? [] : (await getSMUpcoming() ?? []);
       matches = [...(live ?? []), ...upcoming];
+      source = "sportmonks";
+    } else if (isCricApiKeySet()) {
+      // Only 1 live API call per poll — series_info is server-cached (revalidate:30)
+      const [current, series] = await Promise.all([
+        getCurrentMatches(),
+        isCricApiConfigured() ? getSeriesMatches() : Promise.resolve([]),
+      ]);
+      const seen = new Set<string>(current.map((m) => m.id));
+      matches = [...current, ...series.filter((m) => !seen.has(m.id))];
+      source = "cricapi-current";
     } else {
-      // Fallback to the unified getLiveMatches (CricAPI or mock)
-      matches = await getLiveMatches();
+      source = "fallback";
+      matches = [];
     }
 
     return NextResponse.json({
       ok: true,
-      source: isSportMonksConfigured() ? "sportmonks" : "fallback",
+      source,
       count: matches.length,
       updatedAt: new Date().toISOString(),
       matches,
