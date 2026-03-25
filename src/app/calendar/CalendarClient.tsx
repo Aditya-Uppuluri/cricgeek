@@ -74,6 +74,10 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
     match.commentarySessions.find((session) => ["live", "paused", "scheduled"].includes(session.status)) ??
     match.commentarySessions[0];
 
+  const upcomingMatches = matches
+    .filter((match) => match.date >= today)
+    .slice(0, 10);
+
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
       <h1 className="text-3xl font-black text-white mb-2">Cricket Calendar</h1>
@@ -97,6 +101,15 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
           <ChevronRight size={20} />
         </button>
       </div>
+
+      {matches.length === 0 && (
+        <div className="mb-8 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5">
+          <p className="text-sm font-semibold text-amber-300">No calendar matches available right now.</p>
+          <p className="mt-1 text-sm text-amber-200/80">
+            The live cricket API did not return fixtures for this request. If your API quota is exhausted, the calendar will stay empty until the limit resets.
+          </p>
+        </div>
+      )}
 
       {/* Calendar Grid */}
       <div className="bg-cg-dark-2 border border-gray-800 rounded-xl overflow-hidden">
@@ -194,10 +207,7 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
       <div className="mt-8">
         <h3 className="text-lg font-bold text-white mb-4">Upcoming Matches</h3>
         <div className="space-y-2">
-          {matches
-            .filter((m) => m.date >= today)
-            .slice(0, 10)
-            .map((match) => (
+          {upcomingMatches.map((match) => (
               <Link key={match.id} href={`/matches/${match.id}`}>
                 <div className="bg-cg-dark-2 border border-gray-800 rounded-lg p-3 hover:border-cg-green/50 transition-all flex items-center gap-3">
                   <span
@@ -277,6 +287,11 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
                 </div>
               </Link>
             ))}
+          {upcomingMatches.length === 0 && (
+            <div className="rounded-lg border border-gray-800 bg-cg-dark-2 p-4 text-sm text-gray-400">
+              No upcoming matches are available from the current API response.
+            </div>
+          )}
         </div>
       </div>
     </div>

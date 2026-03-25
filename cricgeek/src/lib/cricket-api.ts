@@ -123,8 +123,31 @@ export async function getMatchSquad(matchId: string): Promise<Squad[] | null> {
 
 // Get upcoming matches (calendar)
 export async function getUpcomingMatches(): Promise<CalendarMatch[]> {
-  const data = await fetchApi<CalendarMatch[]>("matches", { offset: "0" });
-  return data || getMockCalendarMatches();
+  if (isCricApiKeySet()) {
+    const seriesMatches = isCricApiConfigured() ? await getSeriesMatches(900) : [];
+    const upcomingMatches = sortMatches(
+      seriesMatches.filter((match) => !match.matchEnded)
+    );
+
+    if (upcomingMatches.length > 0) {
+      return upcomingMatches.map((match) => ({
+        id: match.id,
+        name: match.name,
+        matchType: match.matchType,
+        date: match.date,
+        dateTimeGMT: match.dateTimeGMT,
+        teams: match.teams,
+        teamInfo: match.teamInfo,
+        venue: match.venue,
+        status: match.status,
+        series_id: match.series_id,
+      }));
+    }
+
+    return [];
+  }
+
+  return ALLOW_MOCK_MATCH_DATA ? getMockCalendarMatches() : [];
 }
 
 // Get series list

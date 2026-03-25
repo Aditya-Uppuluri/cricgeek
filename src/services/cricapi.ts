@@ -39,6 +39,7 @@ interface RawMatch {
 
 interface SeriesInfoResponse {
   status: string;
+  reason?: string;
   data?: {
     matchList?: RawMatch[];
   };
@@ -46,6 +47,7 @@ interface SeriesInfoResponse {
 
 interface CurrentMatchesResponse {
   status: string;
+  reason?: string;
   data?: RawMatch[];
 }
 
@@ -114,12 +116,14 @@ export function isCricApiKeySet(): boolean {
   return Boolean(API_KEY);
 }
 
-export async function getMatches(): Promise<Match[]> {
+export async function getMatches(revalidateSeconds = 600): Promise<Match[]> {
   if (!API_KEY) return [];
 
   try {
     const url = `${BASE_URL}/matches?apikey=${API_KEY}&offset=0`;
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, {
+      next: { revalidate: revalidateSeconds },
+    });
 
     if (!response.ok) {
       console.error(`[cricapi] /matches HTTP ${response.status}`);
@@ -127,7 +131,10 @@ export async function getMatches(): Promise<Match[]> {
     }
 
     const json: CurrentMatchesResponse = await response.json();
-    if (json.status !== "success" || !json.data) return [];
+    if (json.status !== "success" || !json.data) {
+      console.error("[cricapi] /matches failure:", json.reason || json.status);
+      return [];
+    }
 
     const seen = new Set<string>();
     return json.data
@@ -143,12 +150,14 @@ export async function getMatches(): Promise<Match[]> {
   }
 }
 
-export async function getCurrentMatches(): Promise<Match[]> {
+export async function getCurrentMatches(revalidateSeconds = 120): Promise<Match[]> {
   if (!API_KEY) return [];
 
   try {
     const url = `${BASE_URL}/currentMatches?apikey=${API_KEY}&offset=0`;
-    const response = await fetch(url, { cache: "no-store" });
+    const response = await fetch(url, {
+      next: { revalidate: revalidateSeconds },
+    });
 
     if (!response.ok) {
       console.error(`[cricapi] currentMatches HTTP ${response.status}`);
@@ -156,7 +165,10 @@ export async function getCurrentMatches(): Promise<Match[]> {
     }
 
     const json: CurrentMatchesResponse = await response.json();
-    if (json.status !== "success" || !json.data) return [];
+    if (json.status !== "success" || !json.data) {
+      console.error("[cricapi] currentMatches failure:", json.reason || json.status);
+      return [];
+    }
 
     const seen = new Set<string>();
     return json.data
@@ -187,7 +199,10 @@ export async function getSeriesMatches(revalidateSeconds = 30): Promise<Match[]>
     }
 
     const json: SeriesInfoResponse = await response.json();
-    if (json.status !== "success") return [];
+    if (json.status !== "success") {
+      console.error("[cricapi] series_info failure:", json.reason || json.status);
+      return [];
+    }
 
     return (json.data?.matchList ?? []).map(transformMatch);
   } catch (error) {
