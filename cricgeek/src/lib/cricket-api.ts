@@ -1,5 +1,4 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
-import { getSMLivescores, getSMUpcoming, isSportMonksConfigured } from "@/lib/sportmonks";
 import { getCurrentMatches, getSeriesMatches, isCricApiConfigured, isCricApiKeySet } from "@/services/cricapi";
 
 const API_KEY = process.env.CRICKET_API_KEY || "";
@@ -47,18 +46,9 @@ async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}
   }
 }
 
-// Get current/live matches — SportMonks → CricAPI (current + series merged) → Mock
+// Get current/live matches — CricAPI (current + series merged) → Mock
 export async function getLiveMatches(): Promise<Match[]> {
-  // 1. Try SportMonks (primary)
-  if (isSportMonksConfigured()) {
-    const smMatches = await getSMLivescores();
-    if (smMatches && smMatches.length > 0) return smMatches;
-
-    const smUpcoming = await getSMUpcoming();
-    if (smUpcoming && smUpcoming.length > 0) return smUpcoming;
-  }
-
-  // 2. CricAPI — fetch currentMatches AND series_info in parallel, then merge.
+  // 1. CricAPI — fetch currentMatches AND series_info in parallel, then merge.
   //    currentMatches  → today's live matches with real scores
   //    series_info     → full fixture list for the pinned series (upcoming/past)
   //    Merged result covers live NOW + upcoming fixtures in one array.
@@ -78,7 +68,7 @@ export async function getLiveMatches(): Promise<Match[]> {
     if (merged.length > 0) return merged;
   }
 
-  // 3. Fall back to mock data
+  // 2. Fall back to mock data
   return getMockLiveMatches();
 }
 
