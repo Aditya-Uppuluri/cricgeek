@@ -10,12 +10,13 @@
 import { NextResponse } from "next/server";
 import { getSMLivescores, getSMUpcoming, isSportMonksConfigured } from "@/lib/sportmonks";
 import { getLiveMatches } from "@/lib/cricket-api";
+import type { Match } from "@/types/cricket";
 
 export const dynamic = "force-dynamic";   // Always fresh — never statically cached
 
 export async function GET() {
   try {
-    let matches;
+    let matches: Match[] = [];
 
     if (isSportMonksConfigured()) {
       const live = await getSMLivescores();
