@@ -59,7 +59,27 @@ function dedupeMatches(matches: Match[]): Match[] {
   return merged;
 }
 
-// Get current/live matches — CricAPI current + broader upcoming + optional series fixtures → Mock
+function sortMatches(matches: Match[]): Match[] {
+  return [...matches].sort((left, right) => {
+    const leftLive = left.matchStarted && !left.matchEnded;
+    const rightLive = right.matchStarted && !right.matchEnded;
+    if (leftLive !== rightLive) return leftLive ? -1 : 1;
+
+    const leftUpcoming = !left.matchStarted;
+    const rightUpcoming = !right.matchStarted;
+    if (leftUpcoming && rightUpcoming) {
+      return new Date(left.dateTimeGMT || left.date).getTime() - new Date(right.dateTimeGMT || right.date).getTime();
+    }
+
+    if (left.matchEnded && right.matchEnded) {
+      return new Date(right.dateTimeGMT || right.date).getTime() - new Date(left.dateTimeGMT || left.date).getTime();
+    }
+
+    return new Date(left.dateTimeGMT || left.date).getTime() - new Date(right.dateTimeGMT || right.date).getTime();
+  });
+}
+
+// Get current/live matches — CricAPI current + broader upcoming + optional series fixtures.
 export async function getLiveMatches(): Promise<Match[]> {
   // 1. Try CricAPI
   if (isCricApiKeySet()) {
@@ -75,10 +95,13 @@ export async function getLiveMatches(): Promise<Match[]> {
       ...scheduledMatches,
     ]);
 
-    if (mergedMatches.length > 0) return mergedMatches;
+    if (mergedMatches.length > 0) return sortMatches(mergedMatches);
+
+    // With a configured API key, prefer an empty state over misleading mock fixtures.
+    return [];
   }
 
-  // 2. Fall back to mock data
+  // 2. Fall back to mock data only for local development without API credentials.
   return getMockLiveMatches();
 }
 

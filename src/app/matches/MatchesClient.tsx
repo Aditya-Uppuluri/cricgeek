@@ -66,8 +66,8 @@ export default function MatchesClient({ initialMatches, source }: MatchesClientP
               Live Scores
             </h1>
             <p className="text-gray-400 text-sm mt-1">
-              {source === "sportmonks"
-                ? "Powered by SportMonks · Real-time"
+              {source === "cricapi"
+                ? "Powered by CricAPI · Live and upcoming fixtures"
                 : "Real-time scores and updates from around the cricket world"}
             </p>
           </div>

@@ -99,7 +99,7 @@ export default function LiveScoresTicker() {
         {/* Updated time */}
         {lastUpdated && (
           <div className="flex-shrink-0 px-3 py-2 text-[10px] text-gray-600 border-l border-gray-800 hidden sm:block">
-            {source === "sportmonks" ? "SportMonks" : "Live"}{" "}
+            {source === "cricapi" ? "CricAPI" : "Live"}{" "}
             · {lastUpdated}
           </div>
         )}

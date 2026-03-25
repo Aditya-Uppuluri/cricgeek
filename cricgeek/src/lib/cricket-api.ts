@@ -46,6 +46,26 @@ async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}
   }
 }
 
+function sortMatches(matches: Match[]): Match[] {
+  return [...matches].sort((left, right) => {
+    const leftLive = left.matchStarted === true && left.matchEnded === false;
+    const rightLive = right.matchStarted === true && right.matchEnded === false;
+    if (leftLive !== rightLive) return leftLive ? -1 : 1;
+
+    const leftUpcoming = left.matchStarted === false;
+    const rightUpcoming = right.matchStarted === false;
+    if (leftUpcoming && rightUpcoming) {
+      return new Date(left.dateTimeGMT || left.date).getTime() - new Date(right.dateTimeGMT || right.date).getTime();
+    }
+
+    if (left.matchEnded && right.matchEnded) {
+      return new Date(right.dateTimeGMT || right.date).getTime() - new Date(left.dateTimeGMT || left.date).getTime();
+    }
+
+    return new Date(left.dateTimeGMT || left.date).getTime() - new Date(right.dateTimeGMT || right.date).getTime();
+  });
+}
+
 // Get current/live matches — CricAPI (current + series merged) → Mock
 export async function getLiveMatches(): Promise<Match[]> {
   // 1. CricAPI — fetch currentMatches AND series_info in parallel, then merge.
@@ -65,10 +85,13 @@ export async function getLiveMatches(): Promise<Match[]> {
     for (const m of current) { seen.add(m.id); merged.push(m); }
     for (const m of series)  { if (!seen.has(m.id)) merged.push(m); }
 
-    if (merged.length > 0) return merged;
+    if (merged.length > 0) return sortMatches(merged);
+
+    // With configured API credentials, show empty state instead of mock fixtures.
+    return [];
   }
 
-  // 2. Fall back to mock data
+  // 2. Fall back to mock data only for local development without API credentials.
   return getMockLiveMatches();
 }
 
