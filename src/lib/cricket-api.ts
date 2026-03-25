@@ -3,6 +3,7 @@ import { getCurrentMatches, getMatches, getSeriesMatches, isCricApiConfigured, i
 
 const API_KEY = process.env.CRICKET_API_KEY || "";
 const BASE_URL = process.env.CRICKET_API_BASE_URL || "https://api.cricapi.com/v1";
+const ALLOW_MOCK_MATCH_DATA = process.env.ALLOW_MOCK_MATCH_DATA === "true";
 
 interface ApiResponse<T> {
   apikey: string;
@@ -101,8 +102,8 @@ export async function getLiveMatches(): Promise<Match[]> {
     return [];
   }
 
-  // 2. Fall back to mock data only for local development without API credentials.
-  return getMockLiveMatches();
+  // 2. Only use mock data when explicitly enabled.
+  return ALLOW_MOCK_MATCH_DATA ? getMockLiveMatches() : [];
 }
 
 
