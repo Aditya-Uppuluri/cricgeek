@@ -39,22 +39,15 @@ export function getMatchTypeColor(type: string): string {
   switch (type?.toUpperCase()) {
     case "T20":
     case "T20I":
-    case "T10":
-      return "bg-green-600";
+      return "bg-green-500";
     case "ODI":
-    case "ODI-W":
-    case "LIST A":
-      return "bg-blue-600";
+      return "bg-blue-500";
     case "TEST":
-    case "TEST-W":
-    case "4-DAY":
-    case "FC":
-      return "bg-red-700";
+      return "bg-red-500";
     case "IPL":
-    case "100-BALL":
       return "bg-amber-500";
     default:
-      return "bg-gray-600";
+      return "bg-gray-500";
   }
 }
 

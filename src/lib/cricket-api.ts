@@ -1,4 +1,5 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
+import { getCurrentMatches, getMatches, getSeriesMatches, isCricApiConfigured, isCricApiKeySet } from "@/services/cricapi";
 
 const API_KEY = process.env.CRICKET_API_KEY || "";
 const BASE_URL = process.env.CRICKET_API_BASE_URL || "https://api.cricapi.com/v1";
@@ -45,12 +46,36 @@ async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}
   }
 }
 
-// Get current/live matches — CricAPI → Mock
+function dedupeMatches(matches: Match[]): Match[] {
+  const seen = new Set<string>();
+  const merged: Match[] = [];
+
+  for (const match of matches) {
+    if (seen.has(match.id)) continue;
+    seen.add(match.id);
+    merged.push(match);
+  }
+
+  return merged;
+}
+
+// Get current/live matches — CricAPI current + broader upcoming + optional series fixtures → Mock
 export async function getLiveMatches(): Promise<Match[]> {
   // 1. Try CricAPI
-  if (API_KEY) {
-    const data = await fetchApi<Match[]>("currentMatches");
-    if (data && data.length > 0) return data;
+  if (isCricApiKeySet()) {
+    const [currentMatches, scheduledMatches, seriesMatches] = await Promise.all([
+      getCurrentMatches(),
+      getMatches(),
+      isCricApiConfigured() ? getSeriesMatches() : Promise.resolve([]),
+    ]);
+
+    const mergedMatches = dedupeMatches([
+      ...currentMatches,
+      ...seriesMatches,
+      ...scheduledMatches,
+    ]);
+
+    if (mergedMatches.length > 0) return mergedMatches;
   }
 
   // 2. Fall back to mock data
