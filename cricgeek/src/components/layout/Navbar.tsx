@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import {
   Menu,
   X,
@@ -24,7 +24,6 @@ const navLinks = [
   { href: "/calendar", label: "Calendar", icon: Calendar },
   { href: "/blog", label: "Community", icon: PenSquare },
   { href: "/leaderboard", label: "Leaderboard", icon: Trophy },
-  { href: "/admin", label: "Admin", icon: Shield },
 ];
 
 interface UserSession {
@@ -35,18 +34,17 @@ interface UserSession {
 }
 
 export default function Navbar() {
-  const router = useRouter();
   const [isOpen, setIsOpen] = useState(false);
   const [user, setUser] = useState<UserSession | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
 
   useEffect(() => {
-    // Check localStorage for session
-    const checkUser = () => {
+    const checkUser = async () => {
       try {
-        const stored = localStorage.getItem("cricgeek-user");
-        if (stored) {
-          setUser(JSON.parse(stored));
+        const res = await fetch("/api/auth/session");
+        const session = await res.json();
+        if (session?.user) {
+          setUser(session.user as UserSession);
         } else {
           setUser(null);
         }
@@ -66,13 +64,15 @@ export default function Navbar() {
   }, []);
 
   const handleSignOut = () => {
-    localStorage.removeItem("cricgeek-user");
     setUser(null);
     setShowDropdown(false);
     window.dispatchEvent(new Event("auth-change"));
-    router.push("/");
-    router.refresh();
+    void signOut({ redirectTo: "/" });
   };
+
+  const visibleNavLinks = user?.role === "admin"
+    ? [...navLinks, { href: "/admin", label: "Admin", icon: Shield }]
+    : navLinks;
 
   return (
     <nav className="bg-cg-dark border-b border-gray-800 sticky top-0 z-50">
@@ -90,7 +90,7 @@ export default function Navbar() {
 
           {/* Desktop Nav */}
           <div className="hidden md:flex items-center gap-1">
-            {navLinks.map((link) => (
+            {visibleNavLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
@@ -142,6 +142,11 @@ export default function Navbar() {
                         <Link href="/leaderboard" onClick={() => setShowDropdown(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-all">
                           <Trophy size={14} /> Leaderboard
                         </Link>
+                        {user.role === "admin" && (
+                          <Link href="/admin" onClick={() => setShowDropdown(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-cg-green hover:bg-gray-800 transition-all">
+                            <Shield size={14} /> Admin Dashboard
+                          </Link>
+                        )}
                       </div>
                       <div className="border-t border-gray-800 py-1">
                         <button
@@ -189,7 +194,7 @@ export default function Navbar() {
       {isOpen && (
         <div className="md:hidden bg-cg-dark border-t border-gray-800 pb-4">
           <div className="px-4 pt-2 space-y-1">
-            {navLinks.map((link) => (
+            {visibleNavLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
@@ -216,6 +221,11 @@ export default function Navbar() {
                 <Link href={`/writer/${user.id}`} onClick={() => setIsOpen(false)} className="text-gray-300 hover:text-white px-3 py-3 rounded-lg text-base font-medium transition-all flex items-center gap-2">
                   <User size={18} /> My Profile
                 </Link>
+                {user.role === "admin" && (
+                  <Link href="/admin" onClick={() => setIsOpen(false)} className="text-cg-green hover:text-cg-green-dark px-3 py-3 rounded-lg text-base font-medium transition-all flex items-center gap-2">
+                    <Shield size={18} /> Admin Dashboard
+                  </Link>
+                )}
                 <button onClick={() => { handleSignOut(); setIsOpen(false); }} className="text-red-400 hover:text-red-300 px-3 py-3 rounded-lg text-base font-medium transition-all flex items-center gap-2 w-full">
                   <LogOut size={18} /> Sign Out
                 </button>

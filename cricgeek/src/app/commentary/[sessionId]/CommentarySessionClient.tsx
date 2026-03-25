@@ -92,6 +92,9 @@ export default function CommentarySessionClient({ session, isModerator }: Props)
           <span className="flex items-center gap-1">
             <Users size={12} /> {entries.length} entries
           </span>
+          <span className="rounded-full border border-gray-700 bg-gray-800/70 px-2 py-0.5 text-xs text-gray-300">
+            Live text for everyone watching
+          </span>
           <span>
             Started {new Date(session.createdAt).toLocaleString("en-IN", {
               day: "numeric",

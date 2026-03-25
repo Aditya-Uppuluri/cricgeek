@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth";
+import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 
 // GET /api/commentary — list sessions (optionally filter by status)
 export async function GET(request: Request) {
@@ -27,16 +28,27 @@ export async function POST(request: Request) {
   const session = await auth();
   const user = session?.user as { id: string; role: string } | undefined;
 
-  if (!user || !["moderator", "admin"].includes(user.role)) {
+  if (!canCreateCommentarySession(user)) {
     return NextResponse.json(
-      { error: "Only moderators and admins can start commentary sessions" },
-      { status: 403 }
+      { error: "Sign in to start a commentary session" },
+      { status: 401 }
     );
   }
 
+  if (!user?.id) {
+    return NextResponse.json(
+      { error: "Sign in to start a commentary session" },
+      { status: 401 }
+    );
+  }
+
+  const userId = user.id;
+
   try {
     const body = await request.json();
-    const { matchId, matchName, matchType } = body;
+    const matchId = typeof body.matchId === "string" ? body.matchId.trim() : "";
+    const matchName = typeof body.matchName === "string" ? body.matchName.trim() : "";
+    const matchType = typeof body.matchType === "string" ? body.matchType.trim() : "T20";
 
     if (!matchId || !matchName) {
       return NextResponse.json(
@@ -45,12 +57,44 @@ export async function POST(request: Request) {
       );
     }
 
+    if (matchId.length > 100 || matchName.length > 200 || matchType.length > 30) {
+      return NextResponse.json(
+        { error: "One or more fields are too long" },
+        { status: 400 }
+      );
+    }
+
+    const existingLiveSession = await prisma.liveCommentarySession.findFirst({
+      where: {
+        matchId,
+        status: {
+          in: ["live", "paused"],
+        },
+      },
+      select: {
+        id: true,
+        moderator: {
+          select: { name: true },
+        },
+      },
+    });
+
+    if (existingLiveSession) {
+      return NextResponse.json(
+        {
+          error: `A live commentary already exists for this match by ${existingLiveSession.moderator.name}.`,
+          sessionId: existingLiveSession.id,
+        },
+        { status: 409 }
+      );
+    }
+
     const commentarySession = await prisma.liveCommentarySession.create({
       data: {
         matchId,
         matchName,
         matchType: matchType || "T20",
-        moderatorId: user.id,
+        moderatorId: userId,
         status: "live",
       },
       include: {

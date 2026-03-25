@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth";
+import { canManageCommentarySession } from "@/lib/commentary-permissions";
 import { notFound } from "next/navigation";
 import CommentarySessionClient from "./CommentarySessionClient";
 
@@ -38,10 +39,7 @@ export default async function CommentarySessionPage({ params }: Props) {
 
   const authSession = await auth();
   const user = authSession?.user as { id: string; role: string } | undefined;
-  const isModerator =
-    user &&
-    ["moderator", "admin"].includes(user.role) &&
-    (commentarySession.moderatorId === user.id || user.role === "admin");
+  const isModerator = canManageCommentarySession(user, commentarySession.moderatorId);
 
   return (
     <CommentarySessionClient

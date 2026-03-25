@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import ScoreRing from "@/components/writer/ScoreRing";
 import WriterProfileCard from "@/components/writer/WriterProfileCard";
+import BlogDiscussion from "@/components/blog/BlogDiscussion";
 import { ARCHETYPE_META } from "@/lib/scoring";
 import { use } from "react";
 
@@ -137,6 +138,7 @@ export default function BlogSlugPage({
   const [loading, setLoading] = useState(true);
   const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
   const [runs, setRuns] = useState(0);
+  const [commentCount, setCommentCount] = useState(0);
   const [runsGiven, setRunsGiven] = useState(false);
   const [milestone, setMilestone] = useState<string | null>(null);
   const viewCounted = useRef(false);
@@ -177,13 +179,16 @@ export default function BlogSlugPage({
           const data = await res.json();
           setBlog(data);
           setRuns(data.runs ?? 0);
+          setCommentCount(data._count?.comments ?? 0);
         } else {
           setBlog(DEMO_BLOG);
           setRuns(DEMO_BLOG.runs);
+          setCommentCount(DEMO_BLOG._count.comments);
         }
       } catch {
         setBlog(DEMO_BLOG);
         setRuns(DEMO_BLOG.runs);
+        setCommentCount(DEMO_BLOG._count.comments);
       } finally {
         setLoading(false);
       }
@@ -332,7 +337,7 @@ export default function BlogSlugPage({
               🏏 {runs.toLocaleString()} runs
             </span>
             <span className="flex items-center gap-1 text-gray-400">
-              <MessageSquare size={12} /> {blog._count.comments}
+              <MessageSquare size={12} /> {commentCount}
             </span>
           </div>
         </div>
@@ -505,6 +510,12 @@ export default function BlogSlugPage({
             </div>
           </div>
 
+          <BlogDiscussion
+            blogSlug={blog.slug}
+            initialCount={commentCount}
+            onCountChange={setCommentCount}
+          />
+
           {/* ── Section 11: End of Blog Card ─────────────────────── */}
           <div
             className="rounded-2xl p-6 sm:p-8 text-center"
@@ -544,7 +555,8 @@ export default function BlogSlugPage({
               {[
                 { label: "Runs", value: `🏏 ${runs.toLocaleString()}` },
                 { label: "Views", value: `👁️ ${blog.views.toLocaleString()}` },
-                { label: "Comments", value: `💬 ${blog._count.comments}` },
+                { label: "Comments", value: `💬 ${commentCount}` },
+                
                 {
                   label: "Stats",
                   value: `⚽ ${blog.score?.statsVerified ?? 0}`,

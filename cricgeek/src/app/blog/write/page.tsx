@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Bold, Italic, Strikethrough, Heading1, Heading2, Quote, List,
   ListOrdered, Minus, ImageIcon, BarChart3, UserCircle, Video, LinkIcon,
@@ -33,7 +32,7 @@ const OVERS_MESSAGES = [
 ];
 
 export default function WriteBlogPage() {
-  const router = useRouter();
+  const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
@@ -118,6 +117,20 @@ export default function WriteBlogPage() {
     return () => clearInterval(interval);
   }, [autoSave]);
 
+  useEffect(() => {
+    async function loadSession() {
+      try {
+        const res = await fetch("/api/auth/session");
+        const data = await res.json();
+        setSessionUserId(data?.user?.id || null);
+      } catch {
+        setSessionUserId(null);
+      }
+    }
+
+    void loadSession();
+  }, []);
+
   // Load draft
   useEffect(() => {
     try {
@@ -156,15 +169,8 @@ export default function WriteBlogPage() {
       return;
     }
 
-    const userData = localStorage.getItem("cricgeek-user");
-    if (!userData) {
+    if (!sessionUserId) {
       setError("__auth__"); // Special signal to show sign-in banner
-      return;
-    }
-
-    const user = JSON.parse(userData);
-    if (!user?.id) {
-      setError("Session expired. Please sign in again.");
       return;
     }
 
@@ -187,7 +193,7 @@ export default function WriteBlogPage() {
       const res = await fetch("/api/blogs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content, tags, authorId: user.id }),
+        body: JSON.stringify({ title, content, tags }),
       });
 
       const data = await res.json();

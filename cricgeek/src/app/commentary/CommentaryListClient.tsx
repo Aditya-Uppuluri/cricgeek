@@ -1,8 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Mic, Radio, Plus, Loader2, X } from "lucide-react";
+import { Mic, Radio, Plus, Loader2, X, ArrowRight, LogIn } from "lucide-react";
 import SessionCard from "@/components/commentary/SessionCard";
 
 interface Session {
@@ -19,14 +20,21 @@ interface Session {
 
 interface Props {
   sessions: Session[];
-  isModerator: boolean;
-  userId?: string;
+  canStartCommentary: boolean;
+  userName?: string;
+  userLiveSession?: Session | null;
 }
 
-export default function CommentaryListClient({ sessions, isModerator, userId }: Props) {
+export default function CommentaryListClient({
+  sessions,
+  canStartCommentary,
+  userName,
+  userLiveSession,
+}: Props) {
   const router = useRouter();
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [matchId, setMatchId] = useState("");
   const [matchName, setMatchName] = useState("");
   const [matchType, setMatchType] = useState("T20");
@@ -39,16 +47,20 @@ export default function CommentaryListClient({ sessions, isModerator, userId }: 
   const createSession = async () => {
     if (!matchId.trim() || !matchName.trim()) return;
     setCreating(true);
+    setError(null);
     try {
       const res = await fetch("/api/commentary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ matchId: matchId.trim(), matchName: matchName.trim(), matchType }),
       });
+      const data = await res.json();
       if (res.ok) {
-        const data = await res.json();
         router.push(`/commentary/${data.session.id}`);
+        return;
       }
+
+      setError(data.error || "Failed to start commentary session");
     } finally {
       setCreating(false);
     }
@@ -64,10 +76,10 @@ export default function CommentaryListClient({ sessions, isModerator, userId }: 
             Live Commentary
           </h1>
           <p className="text-gray-400 text-sm mt-1">
-            Real-time voice commentary from our moderators on live matches
+            Start live voice-to-text commentary and let everyone follow the match through real-time text
           </p>
         </div>
-        {isModerator && (
+        {canStartCommentary && (
           <button
             onClick={() => setShowCreate(!showCreate)}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-cg-green text-black font-bold text-sm hover:bg-cg-green-dark transition shrink-0"
@@ -78,8 +90,58 @@ export default function CommentaryListClient({ sessions, isModerator, userId }: 
         )}
       </div>
 
+      {canStartCommentary ? (
+        <div className="bg-gradient-to-br from-cg-green/10 via-cg-dark-2 to-cg-dark-3 border border-cg-green/20 rounded-2xl p-5 mb-8">
+          <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4">
+            <div>
+              <p className="text-white font-bold text-lg">
+                {userLiveSession ? "You already have a live commentary session" : `Commentary is ready for ${userName || "you"}`}
+              </p>
+              <p className="text-gray-400 text-sm mt-1">
+                {userLiveSession
+                  ? "Jump back in to keep posting voice-to-text updates for everyone following along."
+                  : "Create a session, speak into your microphone, review the transcription, and publish live text updates instantly."}
+              </p>
+            </div>
+            {userLiveSession ? (
+              <Link
+                href={`/commentary/${userLiveSession.id}`}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-cg-green text-black font-bold text-sm hover:bg-cg-green-dark transition shrink-0"
+              >
+                Resume Session
+                <ArrowRight size={16} />
+              </Link>
+            ) : (
+              <button
+                onClick={() => setShowCreate(true)}
+                className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-cg-green text-black font-bold text-sm hover:bg-cg-green-dark transition shrink-0"
+              >
+                Go Live Now
+                <ArrowRight size={16} />
+              </button>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl p-5 mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+          <div>
+            <p className="text-white font-bold text-lg">Sign in to start commentary</p>
+            <p className="text-gray-400 text-sm mt-1">
+              Anyone with an account can start a commentary session and share live text updates from voice-to-text.
+            </p>
+          </div>
+          <Link
+            href="/auth/login?next=/commentary"
+            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-cg-green text-black font-bold text-sm hover:bg-cg-green-dark transition shrink-0"
+          >
+            <LogIn size={16} />
+            Sign In
+          </Link>
+        </div>
+      )}
+
       {/* Create session form */}
-      {showCreate && (
+      {showCreate && canStartCommentary && !userLiveSession && (
         <div className="bg-cg-dark-2 border border-cg-green/20 rounded-2xl p-6 mb-8 animate-[fadeSlideIn_0.3s_ease-out]">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-white font-bold text-lg flex items-center gap-2">
@@ -126,6 +188,11 @@ export default function CommentaryListClient({ sessions, isModerator, userId }: 
               </select>
             </div>
           </div>
+          {error && (
+            <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+              {error}
+            </div>
+          )}
           <button
             onClick={createSession}
             disabled={creating || !matchId.trim() || !matchName.trim()}
@@ -166,7 +233,7 @@ export default function CommentaryListClient({ sessions, isModerator, userId }: 
           <Radio size={40} className="text-gray-700 mx-auto mb-4" />
           <p className="text-gray-500 text-lg font-medium">No commentary sessions yet</p>
           <p className="text-gray-600 text-sm mt-1">
-            {isModerator ? "Start a new commentary session above!" : "Check back when a match is live"}
+            {canStartCommentary ? "Start a new commentary session above!" : "Check back when a match is live"}
           </p>
         </div>
       )}

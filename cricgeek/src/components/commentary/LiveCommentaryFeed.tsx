@@ -29,6 +29,10 @@ export default function LiveCommentaryFeed({
   const feedRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    setEntries(initialEntries);
+  }, [initialEntries]);
+
   // Connect to SSE stream
   useEffect(() => {
     if (sessionStatus === "ended") return;
@@ -85,22 +89,6 @@ export default function LiveCommentaryFeed({
       setNewCount(0);
     }
   };
-
-  // Allow external additions (from moderator dashboard on same page)
-  const addEntry = (entry: Entry) => {
-    setEntries((prev) => {
-      if (prev.some((p) => p.id === entry.id)) return prev;
-      return [entry, ...prev];
-    });
-  };
-
-  // Expose addEntry for parent component
-  useEffect(() => {
-    (window as unknown as Record<string, unknown>).__commentaryFeedAddEntry = addEntry;
-    return () => {
-      delete (window as unknown as Record<string, unknown>).__commentaryFeedAddEntry;
-    };
-  }, []);
 
   return (
     <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl overflow-hidden">

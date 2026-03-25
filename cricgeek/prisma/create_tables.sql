@@ -44,12 +44,17 @@ CREATE TABLE IF NOT EXISTS `Comment` (
   `content`   TEXT NOT NULL,
   `blogId`    VARCHAR(30) NOT NULL,
   `authorId`  VARCHAR(30) NOT NULL,
+  `parentId`  VARCHAR(30) NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   PRIMARY KEY (`id`),
   INDEX `Comment_blogId_idx` (`blogId`),
+  INDEX `Comment_blogId_createdAt_idx` (`blogId`, `createdAt`),
   INDEX `Comment_authorId_idx` (`authorId`),
+  INDEX `Comment_parentId_idx` (`parentId`),
   CONSTRAINT `Comment_blogId_fkey` FOREIGN KEY (`blogId`) REFERENCES `Blog`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
-  CONSTRAINT `Comment_authorId_fkey` FOREIGN KEY (`authorId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+  CONSTRAINT `Comment_authorId_fkey` FOREIGN KEY (`authorId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `Comment_parentId_fkey` FOREIGN KEY (`parentId`) REFERENCES `Comment`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS `Report` (

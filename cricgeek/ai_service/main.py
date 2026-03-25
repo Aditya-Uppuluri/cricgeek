@@ -298,7 +298,18 @@ async def transcribe_audio(audio: UploadFile = File(...)):
         )
 
     # Write upload to a temp file for Whisper processing
-    suffix = ".webm" if "webm" in content_type else ".wav"
+    if "webm" in content_type:
+        suffix = ".webm"
+    elif "mp4" in content_type or "m4a" in content_type:
+        suffix = ".m4a"
+    elif "mpeg" in content_type or "mp3" in content_type:
+        suffix = ".mp3"
+    elif "ogg" in content_type:
+        suffix = ".ogg"
+    elif "flac" in content_type:
+        suffix = ".flac"
+    else:
+        suffix = ".wav"
     start = time.time()
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
