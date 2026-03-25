@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth";
 import { publish } from "@/lib/commentary-pubsub";
+import { canManageCommentarySession } from "@/lib/commentary-permissions";
+import { screenSubmittedWriting } from "@/lib/content-moderation";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -35,8 +37,8 @@ export async function POST(request: Request, { params }: RouteParams) {
   const authSession = await auth();
   const user = authSession?.user as { id: string; role: string } | undefined;
 
-  if (!user || !["moderator", "admin"].includes(user.role)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   // Verify the session exists and is live
@@ -56,25 +58,42 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   // Only the session moderator or admins can add entries
-  if (session.moderatorId !== user.id && user.role !== "admin") {
+  if (!canManageCommentarySession(user, session.moderatorId)) {
     return NextResponse.json({ error: "Not your session" }, { status: 403 });
   }
 
   try {
     const body = await request.json();
-    const { text, overText, source } = body;
+    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const overText = typeof body.overText === "string" ? body.overText.trim() : "";
+    const source = body.source;
 
-    if (!text || text.trim().length === 0) {
+    if (!text) {
       return NextResponse.json(
         { error: "text is required" },
         { status: 400 }
       );
     }
 
+    if (text.length > 5000 || overText.length > 20) {
+      return NextResponse.json(
+        { error: "Commentary entry is too long" },
+        { status: 400 }
+      );
+    }
+
+    const moderation = screenSubmittedWriting({ content: text });
+    if (!moderation.allowed) {
+      return NextResponse.json(
+        { error: moderation.reason || "This commentary entry did not pass moderation." },
+        { status: 422 }
+      );
+    }
+
     const entry = await prisma.liveCommentaryEntry.create({
       data: {
         sessionId,
-        text: text.trim(),
+        text,
         overText: overText || null,
         source: source === "voice" ? "voice" : "typed",
       },

@@ -18,6 +18,96 @@ interface ModeratorDashboardProps {
   onEntryPosted: (entry: Entry) => void;
 }
 
+type RecorderSupport = {
+  mimeType: string;
+  extension: string;
+};
+
+interface SpeechRecognitionAlternativeLike {
+  transcript: string;
+}
+
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0: SpeechRecognitionAlternativeLike;
+  length: number;
+}
+
+interface SpeechRecognitionEventLike extends Event {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+
+interface SpeechRecognitionLike extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: Event & { error?: string }) => void) | null;
+  onend: (() => void) | null;
+  start(): void;
+  stop(): void;
+}
+
+type SpeechRecognitionConstructor = new () => SpeechRecognitionLike;
+
+function getRecorderSupport(): RecorderSupport | null {
+  if (typeof window === "undefined" || typeof MediaRecorder === "undefined") {
+    return null;
+  }
+
+  const candidates: RecorderSupport[] = [
+    { mimeType: "audio/webm;codecs=opus", extension: "webm" },
+    { mimeType: "audio/webm", extension: "webm" },
+    { mimeType: "audio/mp4;codecs=mp4a.40.2", extension: "mp4" },
+    { mimeType: "audio/mp4", extension: "mp4" },
+  ];
+
+  for (const candidate of candidates) {
+    if (MediaRecorder.isTypeSupported(candidate.mimeType)) {
+      return candidate;
+    }
+  }
+
+  return { mimeType: "", extension: "webm" };
+}
+
+function getSpeechRecognitionSupport(): SpeechRecognitionConstructor | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const speechWindow = window as Window & typeof globalThis & {
+    SpeechRecognition?: SpeechRecognitionConstructor;
+    webkitSpeechRecognition?: SpeechRecognitionConstructor;
+  };
+
+  return speechWindow.SpeechRecognition || speechWindow.webkitSpeechRecognition || null;
+}
+
+function getMicrophoneErrorMessage(error: unknown): string {
+  if (error instanceof DOMException) {
+    if (error.name === "NotAllowedError" || error.name === "PermissionDeniedError") {
+      return "Microphone access was blocked by the browser or system settings.";
+    }
+    if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
+      return "No microphone was found on this device.";
+    }
+    if (error.name === "NotReadableError" || error.name === "TrackStartError") {
+      return "Your microphone is busy in another app. Close the other app and try again.";
+    }
+    if (error.name === "SecurityError") {
+      return "Microphone access requires a secure browser context. Try localhost or HTTPS.";
+    }
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return "Unable to start microphone recording on this browser.";
+}
+
 export default function ModeratorDashboard({
   sessionId,
   sessionStatus,
@@ -38,92 +128,226 @@ export default function ModeratorDashboard({
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const recorderSupportRef = useRef<RecorderSupport | null>(null);
+  const speechRecognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const recognitionSupportedRef = useRef(false);
+  const isVoiceSessionActiveRef = useRef(false);
+  const finalTranscriptRef = useRef("");
+  const interimTranscriptRef = useRef("");
+
+  const cleanupRecordingResources = useCallback(() => {
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+
+    analyserRef.current = null;
+    setAudioLevel(0);
+
+    if (audioContextRef.current) {
+      void audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+  }, []);
+
+  const syncTranscriptState = useCallback(() => {
+    const nextText = [finalTranscriptRef.current, interimTranscriptRef.current]
+      .filter(Boolean)
+      .join(" ")
+      .trim();
+    setTranscribedText(nextText);
+  }, []);
 
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach((t) => t.stop());
-      }
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      isVoiceSessionActiveRef.current = false;
+      speechRecognitionRef.current?.stop();
+      cleanupRecordingResources();
     };
-  }, []);
+  }, [cleanupRecordingResources]);
 
   const startRecording = useCallback(async () => {
     setError(null);
+    finalTranscriptRef.current = "";
+    interimTranscriptRef.current = "";
+    syncTranscriptState();
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+      const recognitionCtor = getSpeechRecognitionSupport();
+      const recorderSupport = getRecorderSupport();
 
-      // Set up audio analyser for waveform visualisation
-      const audioCtx = new AudioContext();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 256;
-      source.connect(analyser);
-      analyserRef.current = analyser;
+      if (!recognitionCtor && !navigator.mediaDevices?.getUserMedia) {
+        throw new Error("This browser does not support microphone capture.");
+      }
 
-      // Animate audio level
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-      const updateLevel = () => {
-        analyser.getByteFrequencyData(dataArray);
-        const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
-        setAudioLevel(avg / 255);
-        animationRef.current = requestAnimationFrame(updateLevel);
-      };
-      updateLevel();
+      if (!recognitionCtor && typeof MediaRecorder === "undefined") {
+        throw new Error("This browser does not support live speech recognition or in-browser audio recording.");
+      }
 
-      // Use MediaRecorder
-      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-        ? "audio/webm;codecs=opus"
-        : "audio/webm";
+      if (!recognitionCtor && !recorderSupport) {
+        throw new Error("This browser does not support the audio format needed for transcription.");
+      }
 
-      const recorder = new MediaRecorder(stream, { mimeType });
-      chunksRef.current = [];
+      if (navigator.mediaDevices?.getUserMedia) {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        streamRef.current = stream;
+        recorderSupportRef.current = recorderSupport;
 
-      recorder.ondataavailable = (e) => {
-        if (e.data.size > 0) chunksRef.current.push(e.data);
-      };
+        // Set up audio analyser for waveform visualisation
+        const AudioContextCtor = window.AudioContext || (window as Window & typeof globalThis & {
+          webkitAudioContext?: typeof AudioContext;
+        }).webkitAudioContext;
 
-      recorder.onstop = async () => {
-        // Stop visualisation
-        if (animationRef.current) cancelAnimationFrame(animationRef.current);
-        setAudioLevel(0);
+        if (AudioContextCtor) {
+          const audioCtx = new AudioContextCtor();
+          audioContextRef.current = audioCtx;
+          const source = audioCtx.createMediaStreamSource(stream);
+          const analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+          analyserRef.current = analyser;
 
-        // Stop mic
-        stream.getTracks().forEach((t) => t.stop());
-        streamRef.current = null;
+          // Animate audio level
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          const updateLevel = () => {
+            analyser.getByteFrequencyData(dataArray);
+            const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
+            setAudioLevel(avg / 255);
+            animationRef.current = requestAnimationFrame(updateLevel);
+          };
+          updateLevel();
+        }
+      }
 
-        if (chunksRef.current.length === 0) return;
+      if (streamRef.current && recorderSupport) {
+        const recorder = recorderSupport.mimeType
+          ? new MediaRecorder(streamRef.current, { mimeType: recorderSupport.mimeType })
+          : new MediaRecorder(streamRef.current);
+        chunksRef.current = [];
 
-        const blob = new Blob(chunksRef.current, { type: mimeType });
-        await transcribeAudio(blob);
-      };
+        recorder.ondataavailable = (e) => {
+          if (e.data.size > 0) chunksRef.current.push(e.data);
+        };
 
-      mediaRecorderRef.current = recorder;
-      recorder.start();
+        recorder.onerror = () => {
+          setError("Recording failed in this browser. Try typed mode or a Chromium browser.");
+          cleanupRecordingResources();
+          setIsRecording(false);
+        };
+
+        recorder.onstop = async () => {
+          const hadRealtimeTranscript = Boolean(finalTranscriptRef.current.trim() || interimTranscriptRef.current.trim());
+          cleanupRecordingResources();
+
+          if (hadRealtimeTranscript || chunksRef.current.length === 0) {
+            return;
+          }
+
+          const blobType = recorder.mimeType || recorderSupport.mimeType || "audio/webm";
+          const blob = new Blob(chunksRef.current, { type: blobType });
+          await transcribeAudio(blob);
+        };
+
+        mediaRecorderRef.current = recorder;
+        recorder.start();
+      }
+
+      if (recognitionCtor) {
+        const recognition = new recognitionCtor();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = "en-US";
+
+        recognition.onresult = (event) => {
+          let finalText = finalTranscriptRef.current;
+          let interimText = "";
+
+          for (let i = event.resultIndex; i < event.results.length; i += 1) {
+            const result = event.results[i];
+            const transcript = result[0]?.transcript?.trim();
+            if (!transcript) {
+              continue;
+            }
+
+            if (result.isFinal) {
+              finalText = [finalText, transcript].filter(Boolean).join(" ").trim();
+            } else {
+              interimText = [interimText, transcript].filter(Boolean).join(" ").trim();
+            }
+          }
+
+          finalTranscriptRef.current = finalText;
+          interimTranscriptRef.current = interimText;
+          syncTranscriptState();
+        };
+
+        recognition.onerror = (event) => {
+          if (event.error === "aborted" || event.error === "no-speech") {
+            return;
+          }
+
+          if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+            setError("Live browser transcription was blocked. Check microphone and speech recognition permissions.");
+          } else {
+            setError("Live browser transcription failed. Recording fallback will still be used if available.");
+          }
+        };
+
+        recognition.onend = () => {
+          if (isVoiceSessionActiveRef.current) {
+            try {
+              recognition.start();
+            } catch {
+              setError("Live browser transcription stopped unexpectedly.");
+            }
+          }
+        };
+
+        speechRecognitionRef.current = recognition;
+        recognitionSupportedRef.current = true;
+        isVoiceSessionActiveRef.current = true;
+        recognition.start();
+      } else {
+        recognitionSupportedRef.current = false;
+        isVoiceSessionActiveRef.current = true;
+      }
+
       setIsRecording(true);
     } catch (err) {
       console.error("Mic access failed:", err);
-      setError("Microphone access denied. Please enable mic permissions.");
+      isVoiceSessionActiveRef.current = false;
+      speechRecognitionRef.current = null;
+      cleanupRecordingResources();
+      setError(getMicrophoneErrorMessage(err));
     }
-  }, []);
+  }, [cleanupRecordingResources, syncTranscriptState]);
 
   const stopRecording = useCallback(() => {
+    isVoiceSessionActiveRef.current = false;
+    speechRecognitionRef.current?.stop();
+    speechRecognitionRef.current = null;
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
       mediaRecorderRef.current.stop();
+    } else {
+      cleanupRecordingResources();
     }
     setIsRecording(false);
-  }, []);
+  }, [cleanupRecordingResources]);
 
   const transcribeAudio = async (blob: Blob) => {
     setIsTranscribing(true);
     setError(null);
     try {
       const formData = new FormData();
-      formData.append("audio", blob, "commentary.webm");
+      const extension = recorderSupportRef.current?.extension || "webm";
+      formData.append("audio", blob, `commentary.${extension}`);
 
       const res = await fetch("/api/commentary/transcribe", {
         method: "POST",
@@ -195,6 +419,7 @@ export default function ModeratorDashboard({
   };
 
   const isLive = sessionStatus === "live";
+  const supportsRealtimeTranscription = recognitionSupportedRef.current;
 
   return (
     <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl overflow-hidden">
@@ -203,7 +428,7 @@ export default function ModeratorDashboard({
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className={`w-3 h-3 rounded-full ${isLive ? "bg-red-500 animate-pulse" : sessionStatus === "paused" ? "bg-yellow-500" : "bg-gray-500"}`} />
-            <h3 className="text-white font-bold text-lg">Moderator Controls</h3>
+            <h3 className="text-white font-bold text-lg">Commentary Controls</h3>
             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${isLive ? "bg-red-500/20 text-red-400" : sessionStatus === "paused" ? "bg-yellow-500/20 text-yellow-400" : "bg-gray-500/20 text-gray-400"}`}>
               {sessionStatus.toUpperCase()}
             </span>
@@ -306,10 +531,12 @@ export default function ModeratorDashboard({
               </div>
               <p className="text-gray-400 text-sm">
                 {isRecording
-                  ? "Recording... Click to stop"
+                  ? supportsRealtimeTranscription
+                    ? "Listening live... words will appear as you speak"
+                    : "Recording... Click to stop"
                   : isTranscribing
                   ? "Transcribing your audio..."
-                  : "Click the mic to start recording"}
+                  : "Click the mic to start live voice transcription"}
               </p>
               {isTranscribing && (
                 <Loader2 size={20} className="text-cg-green animate-spin" />
@@ -335,7 +562,7 @@ export default function ModeratorDashboard({
           <div className="relative">
             <textarea
               placeholder={inputMode === "voice"
-                ? "Transcribed text will appear here. You can edit before posting..."
+                ? "Your commentary will appear here live as you speak. You can edit before posting..."
                 : "Type your commentary here..."}
               value={transcribedText}
               onChange={(e) => setTranscribedText(e.target.value)}

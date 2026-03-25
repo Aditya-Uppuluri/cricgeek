@@ -3,6 +3,7 @@
 import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { signIn } from "next-auth/react";
 import { Eye, EyeOff, Mail, Lock, ArrowRight, Chrome } from "lucide-react";
 
 const CRICKET_FACTS = [
@@ -17,11 +18,14 @@ function LoginContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const registered = searchParams.get("registered");
+  const next = searchParams.get("next");
+  const redirect = searchParams.get("redirect");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [googleLoading, setGoogleLoading] = useState(false);
   const [factIdx] = useState(() => Math.floor(Math.random() * CRICKET_FACTS.length));
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -30,29 +34,39 @@ function LoginContent() {
     setLoading(true);
 
     try {
-      const res = await fetch("/api/auth/login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, password }),
+      const callbackUrl = next || redirect || "/";
+
+      const result = await signIn("credentials", {
+        email,
+        password,
+        redirect: false,
+        callbackUrl,
       });
 
-      const data = await res.json();
-
-      if (!res.ok) {
-        setError(data.error || "Invalid credentials");
+      if (!result || result.error) {
+        setError("Invalid email or password");
         return;
       }
 
-      // Store user in localStorage for client-side session
-      localStorage.setItem("cricgeek-user", JSON.stringify(data.user));
-      window.dispatchEvent(new Event("auth-change"));
-
-      router.push("/");
+      router.push(result.url || callbackUrl);
       router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError("");
+    setGoogleLoading(true);
+
+    try {
+      const callbackUrl = next || redirect || "/";
+      await signIn("google", { callbackUrl });
+    } catch {
+      setError("Google sign-in could not be started. Please try again.");
+      setGoogleLoading(false);
     }
   };
 
@@ -200,9 +214,14 @@ function LoginContent() {
 
           {/* Social buttons */}
           <div className="grid grid-cols-1 gap-2">
-            <button className="flex items-center justify-center gap-2 bg-cg-dark-3 border border-gray-700 rounded-xl py-2.5 text-sm text-gray-300 hover:border-gray-500 hover:bg-gray-800 transition-all">
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={googleLoading}
+              className="flex items-center justify-center gap-2 bg-cg-dark-3 border border-gray-700 rounded-xl py-2.5 text-sm text-gray-300 hover:border-gray-500 hover:bg-gray-800 transition-all disabled:opacity-50"
+            >
               <Chrome size={16} />
-              Google
+              {googleLoading ? "Redirecting to Google..." : "Continue with Google"}
             </button>
           </div>
 

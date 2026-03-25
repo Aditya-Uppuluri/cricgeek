@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
+import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 
@@ -8,8 +9,8 @@ export async function POST(request: Request) {
   const session = await auth();
   const user = session?.user as { id: string; role: string } | undefined;
 
-  if (!user || !["moderator", "admin"].includes(user.role)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  if (!canCreateCommentarySession(user)) {
+    return NextResponse.json({ error: "Sign in to use voice-to-text" }, { status: 401 });
   }
 
   try {

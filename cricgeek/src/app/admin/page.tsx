@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Shield, FileText, Trophy, Star, Check, X, AlertTriangle, Plus,
   Brain, Activity, BarChart3, Zap, TrendingUp
@@ -42,12 +42,28 @@ export default function AdminPage() {
   const [blogs, setBlogs] = useState<AdminBlog[]>([]);
   const [statusFilter, setStatusFilter] = useState("pending");
   const [loading, setLoading] = useState(true);
+  const [authState, setAuthState] = useState<"loading" | "admin" | "user" | "guest">("loading");
 
   useEffect(() => {
-    fetchBlogs();
-  }, [statusFilter]);
+    async function loadSession() {
+      try {
+        const res = await fetch("/api/auth/session");
+        const session = await res.json();
+        if (!session?.user) {
+          setAuthState("guest");
+          return;
+        }
 
-  const fetchBlogs = async () => {
+        setAuthState(session.user.role === "admin" ? "admin" : "user");
+      } catch {
+        setAuthState("guest");
+      }
+    }
+
+    void loadSession();
+  }, []);
+
+  const fetchBlogs = useCallback(async () => {
     setLoading(true);
     try {
       const res = await fetch(`/api/admin/blogs?status=${statusFilter}`);
@@ -61,7 +77,14 @@ export default function AdminPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [statusFilter]);
+
+  useEffect(() => {
+    if (authState !== "admin") {
+      return;
+    }
+    void fetchBlogs();
+  }, [statusFilter, authState, fetchBlogs]);
 
   const updateBlogStatus = async (blogId: string, status: string) => {
     try {
@@ -82,6 +105,46 @@ export default function AdminPage() {
     { id: "contests" as const, label: "Contests", icon: Trophy },
     { id: "featured" as const, label: "Featured Content", icon: Star },
   ];
+
+  if (authState === "loading") {
+    return (
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-16">
+        <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl p-8 text-center">
+          <p className="text-white font-semibold">Checking admin access...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (authState === "guest") {
+    return (
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-16">
+        <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl p-8 text-center">
+          <Shield className="text-cg-green mx-auto mb-4" size={32} />
+          <h1 className="text-2xl font-black text-white mb-2">Admin Sign-In Required</h1>
+          <p className="text-gray-400 mb-6">Only administrators can access this dashboard.</p>
+          <a
+            href="/auth/login?next=/admin"
+            className="inline-flex items-center justify-center rounded-xl bg-cg-green px-5 py-3 text-sm font-bold text-black hover:bg-cg-green-dark transition-all"
+          >
+            Sign In
+          </a>
+        </div>
+      </div>
+    );
+  }
+
+  if (authState === "user") {
+    return (
+      <div className="max-w-4xl mx-auto px-4 sm:px-6 py-16">
+        <div className="bg-cg-dark-2 border border-red-500/20 rounded-2xl p-8 text-center">
+          <Shield className="text-red-400 mx-auto mb-4" size={32} />
+          <h1 className="text-2xl font-black text-white mb-2">Access Restricted</h1>
+          <p className="text-gray-400">This view is only available to admin accounts.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">

@@ -48,7 +48,7 @@ export default function SessionCard({ session }: SessionCardProps) {
           {session.matchName}
         </h3>
 
-        {/* Moderator */}
+        {/* Commentator */}
         <div className="flex items-center gap-2 mb-3">
           <div className="w-6 h-6 rounded-full bg-gradient-to-br from-cg-green to-cg-green-dark flex items-center justify-center text-black text-xs font-bold">
             {session.moderator.name.charAt(0).toUpperCase()}

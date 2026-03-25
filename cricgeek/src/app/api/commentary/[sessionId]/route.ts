@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth";
+import { canManageCommentarySession } from "@/lib/commentary-permissions";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -32,8 +33,8 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   const authSession = await auth();
   const user = authSession?.user as { id: string; role: string } | undefined;
 
-  if (!user || !["moderator", "admin"].includes(user.role)) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
+  if (!user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const existing = await prisma.liveCommentarySession.findUnique({
@@ -45,7 +46,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 
   // Only the session moderator or admins can update
-  if (existing.moderatorId !== user.id && user.role !== "admin") {
+  if (!canManageCommentarySession(user, existing.moderatorId)) {
     return NextResponse.json({ error: "Not your session" }, { status: 403 });
   }
 

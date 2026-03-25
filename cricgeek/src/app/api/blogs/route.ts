@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { auth } from "@/lib/auth";
+import { screenSubmittedWriting } from "@/lib/content-moderation";
+import { slugify } from "@/lib/utils";
 
 // GET all approved blogs
 export async function GET(req: NextRequest) {
@@ -63,17 +66,30 @@ export async function GET(req: NextRequest) {
 // POST new blog
 export async function POST(req: NextRequest) {
   try {
-    const { title, content, tags, authorId } = await req.json();
+    const session = await auth();
+    const user = session?.user as { id: string } | undefined;
+    const { title, content, tags } = await req.json();
 
-    if (!title || !content || !authorId) {
+    if (!user?.id) {
       return NextResponse.json(
-        { error: "Title, content, and authorId are required" },
+        { error: "You must be signed in to publish a blog" },
+        { status: 401 }
+      );
+    }
+
+    if (!title || !content) {
+      return NextResponse.json(
+        { error: "Title and content are required" },
         { status: 400 }
       );
     }
 
+    const cleanTitle = String(title).trim();
+    const cleanContent = String(content).trim();
+    const cleanTags = String(tags || "").trim();
+
     // Word count validation (50-2000 words)
-    const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
+    const wordCount = cleanContent.split(/\s+/).filter(Boolean).length;
     if (wordCount < 50 || wordCount > 2000) {
       return NextResponse.json(
         { error: `Blog must be 50-2000 words. Current: ${wordCount} words` },
@@ -81,22 +97,29 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const slug =
-      title
-        .toLowerCase()
-        .replace(/[^\w ]+/g, "")
-        .replace(/ +/g, "-") +
-      "-" +
-      Date.now().toString(36);
+    const moderation = screenSubmittedWriting({
+      title: cleanTitle,
+      content: cleanContent,
+      tags: cleanTags,
+    });
+
+    if (!moderation.allowed) {
+      return NextResponse.json(
+        { error: moderation.reason || "This submission did not pass moderation." },
+        { status: 422 }
+      );
+    }
+
+    const slug = `${slugify(cleanTitle)}-${Date.now().toString(36)}`;
 
     const blog = await prisma.blog.create({
       data: {
-        title,
-        content,
-        excerpt: content.slice(0, 150) + "...",
+        title: cleanTitle,
+        content: cleanContent,
+        excerpt: `${cleanContent.slice(0, 150).trim()}...`,
         slug,
-        tags: tags || "",
-        authorId,
+        tags: cleanTags,
+        authorId: user.id,
         status: "approved", // Auto-approve for now; enable moderation later
       },
     });

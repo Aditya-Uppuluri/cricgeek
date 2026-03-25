@@ -1,9 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { auth } from "@/lib/auth";
+
+async function requireAdmin() {
+  const session = await auth();
+  const user = session?.user as { role?: string } | undefined;
+
+  return user?.role === "admin";
+}
 
 // GET all blogs for admin (any status)
 export async function GET(req: NextRequest) {
   try {
+    if (!(await requireAdmin())) {
+      return NextResponse.json({ error: "Admin only" }, { status: 403 });
+    }
+
     const { searchParams } = new URL(req.url);
     const status = searchParams.get("status") || "pending";
     const page = parseInt(searchParams.get("page") || "1");
@@ -39,6 +51,10 @@ export async function GET(req: NextRequest) {
 // PATCH - update blog status
 export async function PATCH(req: NextRequest) {
   try {
+    if (!(await requireAdmin())) {
+      return NextResponse.json({ error: "Admin only" }, { status: 403 });
+    }
+
     const { blogId, status } = await req.json();
 
     if (!blogId || !status) {
