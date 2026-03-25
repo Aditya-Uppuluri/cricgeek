@@ -45,6 +45,7 @@ export default function CommentarySessionClient({ session, isModerator }: Props)
 
   const isLive = status === "live";
   const isPaused = status === "paused";
+  const isScheduled = status === "scheduled";
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -65,10 +66,12 @@ export default function CommentarySessionClient({ session, isModerator }: Props)
               ? "bg-red-500/15 text-red-400"
               : isPaused
               ? "bg-yellow-500/15 text-yellow-400"
+              : isScheduled
+              ? "bg-cg-green/15 text-cg-green"
               : "bg-gray-700/50 text-gray-400"
           }`}>
             {isLive && <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse" />}
-            {isLive ? "LIVE" : isPaused ? "PAUSED" : "ENDED"}
+            {isLive ? "LIVE" : isPaused ? "PAUSED" : isScheduled ? "SCHEDULED" : "ENDED"}
           </div>
           <span className="text-xs px-2 py-0.5 rounded bg-gray-800 text-gray-400 font-medium">
             {session.matchType}

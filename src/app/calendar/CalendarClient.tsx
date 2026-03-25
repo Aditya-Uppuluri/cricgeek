@@ -2,12 +2,37 @@
 
 import { useState, useMemo } from "react";
 import Link from "next/link";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight, Mic, FileText, Radio, PenSquare } from "lucide-react";
 import { cn, getMatchTypeColor } from "@/lib/utils";
 import type { CalendarMatch } from "@/types/cricket";
 
+interface LinkedCommentarySession {
+  id: string;
+  matchId: string;
+  matchName: string;
+  matchType: string;
+  status: string;
+  createdAt: string;
+  moderator: { id: string; name: string };
+  _count: { entries: number };
+}
+
+interface LinkedBlog {
+  id: string;
+  title: string;
+  slug: string;
+  createdAt: string;
+  matchTag: string | null;
+  author: { id: string; name: string };
+}
+
+interface CalendarMatchWithLinks extends CalendarMatch {
+  commentarySessions: LinkedCommentarySession[];
+  blogs: LinkedBlog[];
+}
+
 interface CalendarClientProps {
-  matches: CalendarMatch[];
+  matches: CalendarMatchWithLinks[];
 }
 
 export default function CalendarClient({ matches }: CalendarClientProps) {
@@ -25,7 +50,7 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
   });
 
   const matchesByDate = useMemo(() => {
-    const map = new Map<string, CalendarMatch[]>();
+    const map = new Map<string, CalendarMatchWithLinks[]>();
     matches.forEach((match) => {
       const dateKey = match.date;
       if (!map.has(dateKey)) map.set(dateKey, []);
@@ -44,6 +69,10 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
 
   const today = new Date().toISOString().split("T")[0];
   const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+  const getPrimaryCommentary = (match: CalendarMatchWithLinks) =>
+    match.commentarySessions.find((session) => ["live", "paused", "scheduled"].includes(session.status)) ??
+    match.commentarySessions[0];
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -120,22 +149,34 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
                 </span>
                 <div className="space-y-1 mt-1">
                   {dayMatches.slice(0, 2).map((match) => (
-                    <Link
-                      key={match.id}
-                      href={`/matches/${match.id}`}
-                      className="block"
-                    >
-                      <div
-                        className={cn(
-                          "text-[10px] sm:text-xs px-1.5 py-0.5 rounded truncate text-white font-medium",
-                          getMatchTypeColor(match.matchType)
+                    <div key={match.id} className="space-y-1">
+                      <Link href={`/matches/${match.id}`} className="block">
+                        <div
+                          className={cn(
+                            "text-[10px] sm:text-xs px-1.5 py-0.5 rounded truncate text-white font-medium",
+                            getMatchTypeColor(match.matchType)
+                          )}
+                          title={match.name}
+                        >
+                          {match.teamInfo?.[0]?.shortname || match.teams[0]?.slice(0, 3)} v{" "}
+                          {match.teamInfo?.[1]?.shortname || match.teams[1]?.slice(0, 3)}
+                        </div>
+                      </Link>
+                      <div className="flex flex-wrap gap-1">
+                        {match.commentarySessions.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded bg-cg-green/10 px-1.5 py-0.5 text-[9px] text-cg-green">
+                            <Mic size={10} />
+                            {match.commentarySessions.length}
+                          </span>
                         )}
-                        title={match.name}
-                      >
-                        {match.teamInfo?.[0]?.shortname || match.teams[0]?.slice(0, 3)} v{" "}
-                        {match.teamInfo?.[1]?.shortname || match.teams[1]?.slice(0, 3)}
+                        {match.blogs.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded bg-blue-500/10 px-1.5 py-0.5 text-[9px] text-blue-300">
+                            <FileText size={10} />
+                            {match.blogs.length}
+                          </span>
+                        )}
                       </div>
-                    </Link>
+                    </div>
                   ))}
                   {dayMatches.length > 2 && (
                     <span className="text-[10px] text-gray-500">
@@ -172,6 +213,65 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
                       {match.name}
                     </p>
                     <p className="text-gray-500 text-xs truncate">{match.venue}</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      <Link
+                        href={`/matches/${match.id}`}
+                        className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-[11px] font-medium text-white hover:bg-white/10"
+                      >
+                        View Match
+                      </Link>
+                      {getPrimaryCommentary(match) ? (
+                        <Link
+                          href={`/commentary/${getPrimaryCommentary(match)!.id}`}
+                          className="inline-flex items-center gap-1 rounded-lg bg-cg-green/10 px-2 py-1 text-[11px] font-medium text-cg-green hover:bg-cg-green/20"
+                        >
+                          <Radio size={12} />
+                          {getPrimaryCommentary(match)!.status === "scheduled" ? "Scheduled Commentary" : "Commentary"}
+                        </Link>
+                      ) : (
+                        <Link
+                          href={`/commentary?matchId=${encodeURIComponent(match.id)}&matchName=${encodeURIComponent(match.name)}&matchType=${encodeURIComponent(match.matchType)}&status=scheduled`}
+                          className="inline-flex items-center gap-1 rounded-lg bg-cg-green/10 px-2 py-1 text-[11px] font-medium text-cg-green hover:bg-cg-green/20"
+                        >
+                          <Mic size={12} />
+                          Schedule Commentary
+                        </Link>
+                      )}
+                      <Link
+                        href={`/blog/write?matchId=${encodeURIComponent(match.id)}&matchName=${encodeURIComponent(match.name)}`}
+                        className="inline-flex items-center gap-1 rounded-lg bg-blue-500/10 px-2 py-1 text-[11px] font-medium text-blue-300 hover:bg-blue-500/20"
+                      >
+                        <PenSquare size={12} />
+                        Write Blog
+                      </Link>
+                      {match.blogs.length > 0 && (
+                        <Link
+                          href={`/blog?matchId=${encodeURIComponent(match.id)}`}
+                          className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-[11px] font-medium text-gray-300 hover:bg-white/10"
+                        >
+                          <FileText size={12} />
+                          {match.blogs.length} Blog{match.blogs.length === 1 ? "" : "s"}
+                        </Link>
+                      )}
+                    </div>
+                    {(match.commentarySessions.length > 0 || match.blogs.length > 0) && (
+                      <div className="mt-2 space-y-1">
+                        {match.commentarySessions.slice(0, 1).map((session) => (
+                          <p key={session.id} className="text-[11px] text-gray-400 truncate">
+                            Commentary: {session.status.toUpperCase()} by {session.moderator.name}
+                          </p>
+                        ))}
+                        {match.blogs.slice(0, 2).map((blog) => (
+                          <Link
+                            key={blog.id}
+                            href={`/blog/${blog.slug}`}
+                            className="block text-[11px] text-blue-300 truncate hover:text-blue-200"
+                          >
+                            {blog.title}
+                          </Link>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <span className="text-gray-400 text-xs shrink-0">{match.date}</span>
                 </div>

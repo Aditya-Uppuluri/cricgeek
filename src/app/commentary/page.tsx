@@ -27,7 +27,7 @@ export default async function CommentaryPage() {
         where: {
           moderatorId: user.id,
           status: {
-            in: ["live", "paused"],
+            in: ["scheduled", "live", "paused"],
           },
         },
         include: {

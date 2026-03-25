@@ -49,6 +49,7 @@ export async function POST(request: Request) {
     const matchId = typeof body.matchId === "string" ? body.matchId.trim() : "";
     const matchName = typeof body.matchName === "string" ? body.matchName.trim() : "";
     const matchType = typeof body.matchType === "string" ? body.matchType.trim() : "T20";
+    const requestedStatus = body.status === "scheduled" ? "scheduled" : "live";
 
     if (!matchId || !matchName) {
       return NextResponse.json(
@@ -68,7 +69,7 @@ export async function POST(request: Request) {
       where: {
         matchId,
         status: {
-          in: ["live", "paused"],
+          in: ["scheduled", "live", "paused"],
         },
       },
       select: {
@@ -82,7 +83,7 @@ export async function POST(request: Request) {
     if (existingLiveSession) {
       return NextResponse.json(
         {
-          error: `A live commentary already exists for this match by ${existingLiveSession.moderator.name}.`,
+          error: `A commentary session already exists for this match by ${existingLiveSession.moderator.name}.`,
           sessionId: existingLiveSession.id,
         },
         { status: 409 }
@@ -95,7 +96,7 @@ export async function POST(request: Request) {
         matchName,
         matchType: matchType || "T20",
         moderatorId: userId,
-        status: "live",
+        status: requestedStatus,
       },
       include: {
         moderator: { select: { id: true, name: true, avatar: true } },

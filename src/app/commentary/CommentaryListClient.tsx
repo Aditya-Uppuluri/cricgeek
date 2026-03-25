@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Mic, Radio, Plus, Loader2, X, ArrowRight, LogIn } from "lucide-react";
 import SessionCard from "@/components/commentary/SessionCard";
 
@@ -32,17 +32,42 @@ export default function CommentaryListClient({
   userLiveSession,
 }: Props) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [matchId, setMatchId] = useState("");
   const [matchName, setMatchName] = useState("");
   const [matchType, setMatchType] = useState("T20");
-  const [filter, setFilter] = useState<"all" | "live" | "ended">("all");
+  const [sessionMode, setSessionMode] = useState<"live" | "scheduled">("live");
+  const [filter, setFilter] = useState<"all" | "live" | "scheduled" | "ended">("all");
 
   const liveSessions = sessions.filter((s) => s.status === "live" || s.status === "paused");
+  const scheduledSessions = sessions.filter((s) => s.status === "scheduled");
   const endedSessions = sessions.filter((s) => s.status === "ended");
-  const filtered = filter === "all" ? sessions : filter === "live" ? liveSessions : endedSessions;
+  const filtered =
+    filter === "all"
+      ? sessions
+      : filter === "live"
+      ? liveSessions
+      : filter === "scheduled"
+      ? scheduledSessions
+      : endedSessions;
+
+  useEffect(() => {
+    const nextMatchId = searchParams.get("matchId")?.trim() || "";
+    const nextMatchName = searchParams.get("matchName")?.trim() || "";
+    const nextMatchType = searchParams.get("matchType")?.trim() || "T20";
+    const nextStatus = searchParams.get("status") === "scheduled" ? "scheduled" : "live";
+
+    if (!nextMatchId && !nextMatchName) return;
+
+    setMatchId(nextMatchId);
+    setMatchName(nextMatchName);
+    setMatchType(nextMatchType);
+    setSessionMode(nextStatus);
+    setShowCreate(true);
+  }, [searchParams]);
 
   const createSession = async () => {
     if (!matchId.trim() || !matchName.trim()) return;
@@ -52,7 +77,12 @@ export default function CommentaryListClient({
       const res = await fetch("/api/commentary", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ matchId: matchId.trim(), matchName: matchName.trim(), matchType }),
+        body: JSON.stringify({
+          matchId: matchId.trim(),
+          matchName: matchName.trim(),
+          matchType,
+          status: sessionMode,
+        }),
       });
       const data = await res.json();
       if (res.ok) {
@@ -146,7 +176,7 @@ export default function CommentaryListClient({
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-white font-bold text-lg flex items-center gap-2">
               <Mic size={18} className="text-cg-green" />
-              New Commentary Session
+              {sessionMode === "scheduled" ? "Schedule Commentary Session" : "New Commentary Session"}
             </h2>
             <button onClick={() => setShowCreate(false)} className="text-gray-400 hover:text-white">
               <X size={18} />
@@ -188,6 +218,30 @@ export default function CommentaryListClient({
               </select>
             </div>
           </div>
+          <div className="mb-4 flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSessionMode("live")}
+              className={`px-3 py-2 rounded-xl text-sm font-medium transition ${
+                sessionMode === "live"
+                  ? "bg-cg-green/15 text-cg-green border border-cg-green/30"
+                  : "bg-gray-800 text-gray-400 border border-gray-700 hover:text-white"
+              }`}
+            >
+              Go Live
+            </button>
+            <button
+              type="button"
+              onClick={() => setSessionMode("scheduled")}
+              className={`px-3 py-2 rounded-xl text-sm font-medium transition ${
+                sessionMode === "scheduled"
+                  ? "bg-cg-green/15 text-cg-green border border-cg-green/30"
+                  : "bg-gray-800 text-gray-400 border border-gray-700 hover:text-white"
+              }`}
+            >
+              Schedule
+            </button>
+          </div>
           {error && (
             <div className="mb-4 rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-300">
               {error}
@@ -199,14 +253,14 @@ export default function CommentaryListClient({
             className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-cg-green text-black font-bold text-sm hover:bg-cg-green-dark transition disabled:opacity-50"
           >
             {creating ? <Loader2 size={16} className="animate-spin" /> : <Radio size={16} />}
-            {creating ? "Starting..." : "Go Live"}
+            {creating ? "Saving..." : sessionMode === "scheduled" ? "Schedule Session" : "Go Live"}
           </button>
         </div>
       )}
 
       {/* Filter tabs */}
       <div className="flex items-center gap-2 mb-6">
-        {(["all", "live", "ended"] as const).map((f) => (
+        {(["all", "live", "scheduled", "ended"] as const).map((f) => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -216,7 +270,13 @@ export default function CommentaryListClient({
                 : "bg-gray-800 text-gray-400 border border-gray-700 hover:text-white"
             }`}
           >
-            {f === "all" ? "All" : f === "live" ? `Live (${liveSessions.length})` : `Ended (${endedSessions.length})`}
+            {f === "all"
+              ? "All"
+              : f === "live"
+              ? `Live (${liveSessions.length})`
+              : f === "scheduled"
+              ? `Scheduled (${scheduledSessions.length})`
+              : `Ended (${endedSessions.length})`}
           </button>
         ))}
       </div>

@@ -11,12 +11,16 @@ export async function GET(req: NextRequest) {
     const page = parseInt(searchParams.get("page") || "1");
     const limit = parseInt(searchParams.get("limit") || "10");
     const tag = searchParams.get("tag");
+    const matchId = searchParams.get("matchId");
 
     const archetype = searchParams.get("archetype");
 
     const where: Record<string, unknown> = { status: "approved" };
     if (tag) {
       where.tags = { contains: tag };
+    }
+    if (matchId) {
+      where.matchTag = matchId;
     }
     if (archetype && ["analyst", "fan", "storyteller", "debater"].includes(archetype)) {
       where.score = { archetypeLabel: archetype };
@@ -31,6 +35,7 @@ export async function GET(req: NextRequest) {
           excerpt: true,
           slug: true,
           tags: true,
+          matchTag: true,
           views: true,
           runs: true,
           createdAt: true,
@@ -68,7 +73,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await auth();
     const user = session?.user as { id: string } | undefined;
-    const { title, content, tags } = await req.json();
+    const { title, content, tags, matchId } = await req.json();
 
     if (!user?.id) {
       return NextResponse.json(
@@ -87,6 +92,8 @@ export async function POST(req: NextRequest) {
     const cleanTitle = String(title).trim();
     const cleanContent = String(content).trim();
     const cleanTags = String(tags || "").trim();
+    const cleanMatchId =
+      typeof matchId === "string" && matchId.trim().length > 0 ? matchId.trim() : null;
 
     // Word count validation (50-2000 words)
     const wordCount = cleanContent.split(/\s+/).filter(Boolean).length;
@@ -119,6 +126,7 @@ export async function POST(req: NextRequest) {
         excerpt: `${cleanContent.slice(0, 150).trim()}...`,
         slug,
         tags: cleanTags,
+        matchTag: cleanMatchId,
         authorId: user.id,
         status: "approved", // Auto-approve for now; enable moderation later
       },

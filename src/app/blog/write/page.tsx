@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Bold, Italic, Strikethrough, Heading1, Heading2, Quote, List,
   ListOrdered, Minus, ImageIcon, BarChart3, UserCircle, Video, LinkIcon,
@@ -32,6 +33,7 @@ const OVERS_MESSAGES = [
 ];
 
 export default function WriteBlogPage() {
+  const searchParams = useSearchParams();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
@@ -48,6 +50,8 @@ export default function WriteBlogPage() {
   const [tagError, setTagError] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [placeholderIdx] = useState(() => Math.floor(Math.random() * PLACEHOLDERS.length));
+  const linkedMatchId = searchParams.get("matchId")?.trim() || "";
+  const linkedMatchName = searchParams.get("matchName")?.trim() || "";
 
   const generateTags = async () => {
     if (!content.trim() && !title.trim()) {
@@ -193,7 +197,7 @@ export default function WriteBlogPage() {
       const res = await fetch("/api/blogs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content, tags }),
+        body: JSON.stringify({ title, content, tags, matchId: linkedMatchId || null }),
       });
 
       const data = await res.json();
@@ -308,6 +312,16 @@ export default function WriteBlogPage() {
           </button>
         </div>
       </div>
+
+      {linkedMatchId && (
+        <div className="px-4 pt-4">
+          <div className="mx-auto max-w-5xl rounded-xl border border-cg-green/20 bg-cg-green/5 px-4 py-3 text-sm text-cg-green">
+            Writing for match coverage:
+            {" "}
+            <span className="font-semibold text-white">{linkedMatchName || linkedMatchId}</span>
+          </div>
+        </div>
+      )}
 
       {/* Font picker dropdown */}
       {showFontPicker && (

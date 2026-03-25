@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import { PenSquare, Clock, Eye, MessageSquare, Search, Trophy, TrendingUp } from "lucide-react";
 import AdSlot from "@/components/ads/AdSlot";
 import WriterProfileCard from "@/components/writer/WriterProfileCard";
@@ -13,6 +14,7 @@ interface Blog {
   excerpt: string;
   slug: string;
   tags: string;
+  matchTag?: string | null;
   views: number;
   runs: number;
   createdAt: string;
@@ -36,74 +38,25 @@ function getScoreBg(bqs: number): string {
 }
 
 export default function BlogPage() {
+  const searchParams = useSearchParams();
   const [blogs, setBlogs] = useState<Blog[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const matchId = searchParams.get("matchId") || "";
 
   useEffect(() => {
     fetchBlogs();
-  }, []);
+  }, [matchId]);
 
   const fetchBlogs = async () => {
     try {
-      const res = await fetch("/api/blogs");
+      const params = new URLSearchParams();
+      if (matchId) params.set("matchId", matchId);
+      const res = await fetch(`/api/blogs${params.toString() ? `?${params.toString()}` : ""}`);
       const data = await res.json();
       setBlogs(data.blogs || []);
     } catch {
-      setBlogs([
-        {
-          id: "1",
-          title: "Why Jasprit Bumrah is the Best Fast Bowler Right Now",
-          excerpt: "An in-depth analysis of Bumrah's incredible form across all formats and what makes him nearly unplayable in Test cricket...",
-          slug: "bumrah-best-fast-bowler",
-          tags: "analysis,india,test-cricket",
-          views: 1250,
-          runs: 47,
-          createdAt: new Date().toISOString(),
-          author: { id: "1", name: "CricAnalyst Pro", avatar: null },
-          _count: { comments: 24 },
-          score: { bqs: 88, archetypeLabel: "analyst" },
-        },
-        {
-          id: "2",
-          title: "IPL 2026 Auction Analysis: Best Value Picks",
-          excerpt: "Breaking down the smartest buys at the IPL 2026 auction and which teams built the most balanced squads...",
-          slug: "ipl-2026-auction-analysis",
-          tags: "ipl,auction,analysis",
-          views: 890,
-          runs: 31,
-          createdAt: new Date(Date.now() - 86400000).toISOString(),
-          author: { id: "2", name: "TheCricStoryteller", avatar: null },
-          _count: { comments: 15 },
-          score: { bqs: 76, archetypeLabel: "storyteller" },
-        },
-        {
-          id: "3",
-          title: "The Art of Spin Bowling in Modern T20 Cricket",
-          excerpt: "How spinners have adapted their craft to survive and thrive in the high-scoring T20 era with innovative variations...",
-          slug: "spin-bowling-t20",
-          tags: "t20,bowling,analysis",
-          views: 670,
-          runs: 19,
-          createdAt: new Date(Date.now() - 172800000).toISOString(),
-          author: { id: "3", name: "SpinWizard", avatar: null },
-          _count: { comments: 8 },
-          score: { bqs: 72, archetypeLabel: "fan" },
-        },
-        {
-          id: "4",
-          title: "Kohli vs Root: Who is the Better Test Batsman in 2026?",
-          excerpt: "A comprehensive statistical comparison of two modern batting greats and their evolving form across conditions...",
-          slug: "kohli-vs-root-2026",
-          tags: "debate,test-cricket,batting",
-          views: 1890,
-          runs: 82,
-          createdAt: new Date(Date.now() - 259200000).toISOString(),
-          author: { id: "1", name: "CricAnalyst Pro", avatar: null },
-          _count: { comments: 42 },
-          score: { bqs: 92, archetypeLabel: "debater" },
-        },
-      ]);
+      setBlogs([]);
     } finally {
       setLoading(false);
     }
@@ -125,7 +78,9 @@ export default function BlogPage() {
             Community
           </h1>
           <p className="text-gray-400 text-sm mt-1">
-            AI-scored cricket analysis, opinions, and discussion
+            {matchId
+              ? "Coverage linked to this match, including previews, reactions, and discussion."
+              : "AI-scored cricket analysis, opinions, and discussion"}
           </p>
         </div>
         <div className="flex gap-2">
