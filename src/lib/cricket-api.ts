@@ -1,5 +1,6 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
 import { getCurrentMatches, getMatches, getSeriesMatches, isCricApiConfigured, isCricApiKeySet } from "@/services/cricapi";
+import { getSMScorecard, isSportMonksConfigured } from "@/lib/sportmonks";
 
 const API_KEY = process.env.CRICKET_API_KEY || "";
 const BASE_URL = process.env.CRICKET_API_BASE_URL || "https://api.cricapi.com/v1";
@@ -115,6 +116,13 @@ export async function getMatchInfo(matchId: string): Promise<Match | null> {
 
 // Get match scorecard
 export async function getMatchScorecard(matchId: string): Promise<Scorecard[] | null> {
+  if (isSportMonksConfigured()) {
+    const sportMonksScorecard = await getSMScorecard(matchId);
+    if (sportMonksScorecard && sportMonksScorecard.length > 0) {
+      return sportMonksScorecard;
+    }
+  }
+
   const data = await fetchApi<Scorecard[]>("match_scorecard", { id: matchId });
   return data || getMockScorecard();
 }

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET(
@@ -6,6 +7,8 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await auth();
+    const viewerId = (session?.user as { id?: string } | undefined)?.id;
     const { id } = await params;
 
     const user = await prisma.user.findUnique({
@@ -15,9 +18,23 @@ export async function GET(
         name: true,
         avatar: true,
         bio: true,
+        role: true,
         createdAt: true,
         writerProfile: true,
         writerDNA: true,
+        _count: {
+          select: {
+            followers: true,
+            blogs: true,
+          },
+        },
+        followers: viewerId
+          ? {
+              where: { followerId: viewerId },
+              select: { id: true },
+              take: 1,
+            }
+          : false,
         badges: {
           orderBy: { earnedAt: "desc" },
         },
@@ -52,7 +69,15 @@ export async function GET(
       name: user.name,
       avatar: user.avatar,
       bio: user.bio,
+      role: user.role,
       createdAt: user.createdAt,
+      stats: {
+        followerCount: user._count.followers,
+        blogCount: user._count.blogs,
+      },
+      viewerState: {
+        followsWriter: Array.isArray(user.followers) ? user.followers.length > 0 : false,
+      },
       profile: user.writerProfile ?? {
         averageBQS: 0,
         totalBlogs: 0,

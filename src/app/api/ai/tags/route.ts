@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
-const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "llama3.2";
+const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
 export async function POST(req: NextRequest) {
   try {

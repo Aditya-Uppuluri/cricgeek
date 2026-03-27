@@ -137,7 +137,7 @@ export default function Navbar() {
                           <User size={14} /> My Profile
                         </Link>
                         <Link href="/blog/write" onClick={() => setShowDropdown(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-all">
-                          <PenSquare size={14} /> Write Blog
+                          <PenSquare size={14} /> {user.role === "user" ? "Become a Writer" : "Write Blog"}
                         </Link>
                         <Link href="/leaderboard" onClick={() => setShowDropdown(false)} className="flex items-center gap-2 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-all">
                           <Trophy size={14} /> Leaderboard
@@ -220,6 +220,9 @@ export default function Navbar() {
                 </div>
                 <Link href={`/writer/${user.id}`} onClick={() => setIsOpen(false)} className="text-gray-300 hover:text-white px-3 py-3 rounded-lg text-base font-medium transition-all flex items-center gap-2">
                   <User size={18} /> My Profile
+                </Link>
+                <Link href="/blog/write" onClick={() => setIsOpen(false)} className="text-gray-300 hover:text-white px-3 py-3 rounded-lg text-base font-medium transition-all flex items-center gap-2">
+                  <PenSquare size={18} /> {user.role === "user" ? "Become a Writer" : "Write Blog"}
                 </Link>
                 {user.role === "admin" && (
                   <Link href="/admin" onClick={() => setIsOpen(false)} className="text-cg-green hover:text-cg-green-dark px-3 py-3 rounded-lg text-base font-medium transition-all flex items-center gap-2">

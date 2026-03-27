@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 
 export async function GET(
@@ -6,6 +7,8 @@ export async function GET(
   { params }: { params: Promise<{ slug: string }> }
 ) {
   try {
+    const session = await auth();
+    const viewerId = (session?.user as { id?: string } | undefined)?.id;
     const { slug } = await params;
 
     const blog = await prisma.blog.findUnique({
@@ -16,12 +19,39 @@ export async function GET(
             id: true,
             name: true,
             avatar: true,
+            role: true,
+            _count: {
+              select: {
+                followers: true,
+              },
+            },
+            followers: viewerId
+              ? {
+                  where: { followerId: viewerId },
+                  select: { id: true },
+                  take: 1,
+                }
+              : false,
           },
         },
         _count: {
-          select: { comments: true },
+          select: { comments: true, reactions: true, saves: true },
         },
         score: true,
+        reactions: viewerId
+          ? {
+              where: { userId: viewerId },
+              select: { id: true },
+              take: 1,
+            }
+          : false,
+        saves: viewerId
+          ? {
+              where: { userId: viewerId },
+              select: { id: true },
+              take: 1,
+            }
+          : false,
       },
     });
 
@@ -36,6 +66,14 @@ export async function GET(
 
     return NextResponse.json({
       ...blog,
+      reactionCount: blog._count.reactions,
+      saveCount: blog._count.saves,
+      viewerState: {
+        reacted: Array.isArray(blog.reactions) ? blog.reactions.length > 0 : false,
+        saved: Array.isArray(blog.saves) ? blog.saves.length > 0 : false,
+        followsAuthor:
+          Array.isArray(blog.author.followers) ? blog.author.followers.length > 0 : false,
+      },
       authorProfile,
     });
   } catch (error) {

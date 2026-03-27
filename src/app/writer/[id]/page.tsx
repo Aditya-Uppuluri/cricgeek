@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { ArrowLeft, Trophy, Award, Target, Eye, FileText, TrendingUp } from "lucide-react";
 import Link from "next/link";
+import FollowWriterButton from "@/components/writer/FollowWriterButton";
 import WriterDNAChart from "@/components/writer/WriterDNAChart";
 import ScoreRing from "@/components/writer/ScoreRing";
 import { ARCHETYPE_CONFIG, getScoreColor } from "@/components/writer/WriterProfileCard";
@@ -13,7 +14,10 @@ interface WriterData {
   name: string;
   avatar: string | null;
   bio: string | null;
+  role?: string;
   createdAt: string;
+  stats?: { followerCount: number; blogCount: number };
+  viewerState?: { followsWriter: boolean };
   profile: { averageBQS: number; totalBlogs: number; totalViews: number; totalRuns: number; archetype: string; writerTitle: string; level: number; xp: number; bestBQS: number; featuredCount: number; streak: number; bcs: number; statAccuracy: number };
   dna: { analyst: number; fan: number; storyteller: number; debater: number };
   badges: { badge: string; title: string; description: string; tier: string; earnedAt: string }[];
@@ -28,39 +32,11 @@ const TIER_COLORS: Record<string, string> = {
   platinum: "from-indigo-300 to-purple-400 border-indigo-400/50",
 };
 
-// Demo data for when API is not available
-const DEMO_WRITER: WriterData = {
-  id: "demo-user",
-  name: "CricGeek Writer",
-  avatar: null,
-  bio: "Passionate cricket analyst covering all formats. Specializing in batting technique analysis and match predictions.",
-  createdAt: new Date(Date.now() - 90 * 86400000).toISOString(),
-  profile: { averageBQS: 74.5, totalBlogs: 12, totalViews: 3420, totalRuns: 184, archetype: "analyst", writerTitle: "THE ANALYST", level: 5, xp: 480, bestBQS: 92, featuredCount: 2, streak: 3, bcs: 82, statAccuracy: 81 },
-  dna: { analyst: 85, fan: 55, storyteller: 62, debater: 48 },
-  badges: [
-    { badge: "first_blood", title: "First Blood", description: "Published your first blog", tier: "bronze", earnedAt: new Date(Date.now() - 80 * 86400000).toISOString() },
-    { badge: "stat_master", title: "Stat Master", description: "10+ verified stats across blogs", tier: "silver", earnedAt: new Date(Date.now() - 30 * 86400000).toISOString() },
-    { badge: "five_wickets", title: "Five-For", description: "5 blogs with BQS above 80", tier: "silver", earnedAt: new Date(Date.now() - 10 * 86400000).toISOString() },
-  ],
-  achievements: [
-    { achievement: "blogs_1", title: "Opening Over", description: "Published 1 blog", milestone: 1, earnedAt: new Date(Date.now() - 80 * 86400000).toISOString() },
-    { achievement: "blogs_5", title: "Building Momentum", description: "Published 5 blogs", milestone: 5, earnedAt: new Date(Date.now() - 50 * 86400000).toISOString() },
-    { achievement: "blogs_10", title: "Set in the Crease", description: "Published 10 blogs", milestone: 10, earnedAt: new Date(Date.now() - 15 * 86400000).toISOString() },
-    { achievement: "views_100", title: "Crowd Gathering", description: "Total 100 views", milestone: 100, earnedAt: new Date(Date.now() - 60 * 86400000).toISOString() },
-    { achievement: "views_1000", title: "Stadium Roar", description: "Total 1000 views", milestone: 1000, earnedAt: new Date(Date.now() - 5 * 86400000).toISOString() },
-  ],
-  recentBlogs: [
-    { id: "1", title: "Why Bumrah's Yorker is Literally Unplayable", slug: "bumrah-yorker-analysis", views: 890, runs: 34, createdAt: new Date(Date.now() - 2 * 86400000).toISOString(), score: { bqs: 88 } },
-    { id: "2", title: "IPL 2026: Mumbai Indians Auction Strategy Deep Dive", slug: "mi-auction-2026", views: 652, runs: 21, createdAt: new Date(Date.now() - 5 * 86400000).toISOString(), score: { bqs: 76 } },
-    { id: "3", title: "Kohli vs Root: The Definitive Test Comparison", slug: "kohli-vs-root", views: 1120, runs: 67, createdAt: new Date(Date.now() - 12 * 86400000).toISOString(), score: { bqs: 92 } },
-    { id: "4", title: "Spin Bowling in T20s: A Statistical Analysis", slug: "spin-t20-analysis", views: 445, runs: 11, createdAt: new Date(Date.now() - 20 * 86400000).toISOString(), score: { bqs: 71 } },
-  ],
-};
-
 export default function WriterProfilePage({ params }: { params: Promise<{ id: string }> }) {
   const resolvedParams = use(params);
   const [writer, setWriter] = useState<WriterData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     async function fetchWriter() {
@@ -70,10 +46,13 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
           const data = await res.json();
           setWriter(data);
         } else {
-          setWriter(DEMO_WRITER);
+          const data = await res.json().catch(() => null);
+          setError(data?.error || "Writer not found");
+          setWriter(null);
         }
       } catch {
-        setWriter(DEMO_WRITER);
+        setError("Writer profile could not be loaded");
+        setWriter(null);
       } finally {
         setLoading(false);
       }
@@ -98,7 +77,21 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
     );
   }
 
-  if (!writer) return null;
+  if (!writer) {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-20 text-center">
+        <h1 className="text-2xl font-black text-white">Writer unavailable</h1>
+        <p className="mt-2 text-sm text-gray-400">{error || "We could not load this writer profile."}</p>
+        <Link
+          href="/blog"
+          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-cg-green px-4 py-2 text-sm font-bold text-black hover:bg-cg-green-dark"
+        >
+          <ArrowLeft size={14} />
+          Back to Community
+        </Link>
+      </div>
+    );
+  }
 
   const config = ARCHETYPE_CONFIG[writer.profile.archetype] || ARCHETYPE_CONFIG.rookie;
   const xpProgress = writer.profile.xp % 100;
@@ -137,6 +130,19 @@ export default function WriterProfilePage({ params }: { params: Promise<{ id: st
               )}
             </p>
             {writer.bio && <p className="text-gray-400 text-sm mt-2">{writer.bio}</p>}
+            <div className="mt-4 flex flex-wrap items-center gap-3">
+              <span className="rounded-full border border-cg-green/20 bg-cg-green/10 px-3 py-1 text-xs font-semibold text-cg-green">
+                {(writer.role || "user").toUpperCase()}
+              </span>
+              <span className="text-xs text-gray-400">
+                {writer.stats?.followerCount ?? 0} follower{(writer.stats?.followerCount ?? 0) === 1 ? "" : "s"}
+              </span>
+              <FollowWriterButton
+                writerId={writer.id}
+                initialFollowing={Boolean(writer.viewerState?.followsWriter)}
+                initialFollowerCount={writer.stats?.followerCount ?? 0}
+              />
+            </div>
             {/* Level / XP */}
             <div className="mt-3 max-w-xs">
               <div className="flex justify-between text-[10px] text-gray-500 mb-1">

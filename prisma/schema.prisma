@@ -28,6 +28,11 @@ model User {
   badges             WriterBadge[]
   writerDNA          WriterDNA?
   writerProfile      WriterProfile?
+  blogReactions      BlogReaction[]
+  savedBlogs         SavedBlog[]
+  following          WriterFollow[]          @relation("WriterFollowFollower")
+  followers          WriterFollow[]          @relation("WriterFollowWriter")
+  feedPreferences    UserFeedPreference?
 }
 
 model Blog {
@@ -44,10 +49,14 @@ model Blog {
   updatedAt DateTime   @updatedAt
   matchTag  String?    @db.VarChar(100)
   runs      Int        @default(0)
+  mentionedPlayers Json?
+  mentionedTeams   Json?
   author    User       @relation(fields: [authorId], references: [id], onDelete: Cascade)
   score     BlogScore?
   comments  Comment[]
   reports   Report[]
+  reactions BlogReaction[]
+  saves     SavedBlog[]
 
   @@index([authorId], map: "Blog_authorId_fkey")
 }
@@ -139,6 +148,7 @@ model BlogScore {
   blogId              String   @unique @db.VarChar(30)
   bqs                 Float    @default(0)
   toneScore           Float    @default(0)
+  negativityScore     Float    @default(0)
   toxicityScore       Float    @default(0)
   originalityScore    Float    @default(0)
   coherenceScore      Float    @default(0)
@@ -155,6 +165,11 @@ model BlogScore {
   infoDensity         Float    @default(0)
   repetitionPenalty   Float    @default(0)
   completeness        Float    @default(0)
+  paragraphScores     Json?
+  explanationJson     Json?
+  toxicityPenaltyApplied Boolean @default(false)
+  toxicityPenaltyOverride Boolean @default(false)
+  scoreVersion        String   @default("qwen3.5-v1") @db.VarChar(40)
   wordCount           Int      @default(0)
   lexicalDiversity    Float    @default(0)
   sentenceVariety     Float    @default(0)
@@ -232,4 +247,54 @@ model LiveCommentaryEntry {
   session   LiveCommentarySession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
   @@index([sessionId, createdAt])
+}
+
+model BlogReaction {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  blogId     String   @db.VarChar(30)
+  userId     String   @db.VarChar(30)
+  type       String   @default("cricket_ball") @db.VarChar(30)
+  createdAt  DateTime @default(now())
+  blog       Blog     @relation(fields: [blogId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([blogId, userId])
+  @@index([userId, createdAt])
+}
+
+model SavedBlog {
+  id        String   @id @default(cuid()) @db.VarChar(30)
+  blogId     String   @db.VarChar(30)
+  userId     String   @db.VarChar(30)
+  createdAt  DateTime @default(now())
+  blog       Blog     @relation(fields: [blogId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([blogId, userId])
+  @@index([userId, createdAt])
+}
+
+model WriterFollow {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  followerId String   @db.VarChar(30)
+  writerId   String   @db.VarChar(30)
+  createdAt  DateTime @default(now())
+  follower   User     @relation("WriterFollowFollower", fields: [followerId], references: [id], onDelete: Cascade)
+  writer     User     @relation("WriterFollowWriter", fields: [writerId], references: [id], onDelete: Cascade)
+
+  @@unique([followerId, writerId])
+  @@index([writerId, createdAt])
+}
+
+model UserFeedPreference {
+  id                 String   @id @default(cuid()) @db.VarChar(30)
+  userId             String   @unique @db.VarChar(30)
+  favoriteTags       Json?
+  favoriteTeams      Json?
+  favoritePlayers    Json?
+  favoriteWriters    Json?
+  favoriteMatchTypes Json?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

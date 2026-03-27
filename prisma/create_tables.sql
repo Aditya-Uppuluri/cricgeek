@@ -31,6 +31,10 @@ CREATE TABLE IF NOT EXISTS `Blog` (
   `authorId`  VARCHAR(30) NOT NULL,
   `tags`      VARCHAR(500) NULL,
   `views`     INT NOT NULL DEFAULT 0,
+  `matchTag`  VARCHAR(100) NULL,
+  `runs`      INT NOT NULL DEFAULT 0,
+  `mentionedPlayers` JSON NULL,
+  `mentionedTeams` JSON NULL,
   `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt` DATETIME(3) NOT NULL,
   PRIMARY KEY (`id`),
@@ -126,6 +130,7 @@ CREATE TABLE IF NOT EXISTS `BlogScore` (
   `blogId`              VARCHAR(30) NOT NULL,
   `bqs`                 DOUBLE NOT NULL DEFAULT 0,
   `toneScore`           DOUBLE NOT NULL DEFAULT 0,
+  `negativityScore`     DOUBLE NOT NULL DEFAULT 0,
   `toxicityScore`       DOUBLE NOT NULL DEFAULT 0,
   `originalityScore`    DOUBLE NOT NULL DEFAULT 0,
   `coherenceScore`      DOUBLE NOT NULL DEFAULT 0,
@@ -142,6 +147,11 @@ CREATE TABLE IF NOT EXISTS `BlogScore` (
   `infoDensity`         DOUBLE NOT NULL DEFAULT 0,
   `repetitionPenalty`   DOUBLE NOT NULL DEFAULT 0,
   `completeness`        DOUBLE NOT NULL DEFAULT 0,
+  `paragraphScores`     JSON NULL,
+  `explanationJson`     JSON NULL,
+  `toxicityPenaltyApplied` BOOLEAN NOT NULL DEFAULT false,
+  `toxicityPenaltyOverride` BOOLEAN NOT NULL DEFAULT false,
+  `scoreVersion`        VARCHAR(40) NOT NULL DEFAULT 'qwen3.5-v1',
   `wordCount`           INT NOT NULL DEFAULT 0,
   `lexicalDiversity`    DOUBLE NOT NULL DEFAULT 0,
   `sentenceVariety`     DOUBLE NOT NULL DEFAULT 0,
@@ -157,11 +167,10 @@ CREATE TABLE IF NOT EXISTS `BlogScore` (
 CREATE TABLE IF NOT EXISTS `WriterDNA` (
   `id`          VARCHAR(30) NOT NULL,
   `userId`      VARCHAR(30) NOT NULL,
-  `analyst`     DOUBLE NOT NULL DEFAULT 50,
-  `storyteller` DOUBLE NOT NULL DEFAULT 50,
-  `critic`      DOUBLE NOT NULL DEFAULT 50,
-  `reporter`    DOUBLE NOT NULL DEFAULT 50,
-  `debater`     DOUBLE NOT NULL DEFAULT 50,
+  `analyst`     DOUBLE NOT NULL DEFAULT 25,
+  `storyteller` DOUBLE NOT NULL DEFAULT 25,
+  `debater`     DOUBLE NOT NULL DEFAULT 25,
+  `fan`         DOUBLE NOT NULL DEFAULT 25,
   `createdAt`   DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   `updatedAt`   DATETIME(3) NOT NULL,
   PRIMARY KEY (`id`),
@@ -194,4 +203,56 @@ CREATE TABLE IF NOT EXISTS `WriterAchievement` (
   PRIMARY KEY (`id`),
   UNIQUE INDEX `WriterAchievement_userId_achievement_key` (`userId`, `achievement`),
   CONSTRAINT `WriterAchievement_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `BlogReaction` (
+  `id`        VARCHAR(30) NOT NULL,
+  `blogId`    VARCHAR(30) NOT NULL,
+  `userId`    VARCHAR(30) NOT NULL,
+  `type`      VARCHAR(30) NOT NULL DEFAULT 'cricket_ball',
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `BlogReaction_blogId_userId_key` (`blogId`, `userId`),
+  INDEX `BlogReaction_userId_createdAt_idx` (`userId`, `createdAt`),
+  CONSTRAINT `BlogReaction_blogId_fkey` FOREIGN KEY (`blogId`) REFERENCES `Blog`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `BlogReaction_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `SavedBlog` (
+  `id`        VARCHAR(30) NOT NULL,
+  `blogId`    VARCHAR(30) NOT NULL,
+  `userId`    VARCHAR(30) NOT NULL,
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `SavedBlog_blogId_userId_key` (`blogId`, `userId`),
+  INDEX `SavedBlog_userId_createdAt_idx` (`userId`, `createdAt`),
+  CONSTRAINT `SavedBlog_blogId_fkey` FOREIGN KEY (`blogId`) REFERENCES `Blog`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `SavedBlog_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `WriterFollow` (
+  `id`         VARCHAR(30) NOT NULL,
+  `followerId` VARCHAR(30) NOT NULL,
+  `writerId`   VARCHAR(30) NOT NULL,
+  `createdAt`  DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `WriterFollow_followerId_writerId_key` (`followerId`, `writerId`),
+  INDEX `WriterFollow_writerId_createdAt_idx` (`writerId`, `createdAt`),
+  CONSTRAINT `WriterFollow_followerId_fkey` FOREIGN KEY (`followerId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE,
+  CONSTRAINT `WriterFollow_writerId_fkey` FOREIGN KEY (`writerId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS `UserFeedPreference` (
+  `id`                 VARCHAR(30) NOT NULL,
+  `userId`             VARCHAR(30) NOT NULL,
+  `favoriteTags`       JSON NULL,
+  `favoriteTeams`      JSON NULL,
+  `favoritePlayers`    JSON NULL,
+  `favoriteWriters`    JSON NULL,
+  `favoriteMatchTypes` JSON NULL,
+  `createdAt`          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt`          DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  PRIMARY KEY (`id`),
+  UNIQUE INDEX `UserFeedPreference_userId_key` (`userId`),
+  CONSTRAINT `UserFeedPreference_userId_fkey` FOREIGN KEY (`userId`) REFERENCES `User`(`id`) ON DELETE CASCADE ON UPDATE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

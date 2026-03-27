@@ -124,6 +124,32 @@ export interface MatchAnalysis {
   createdAt: string;
 }
 
+export interface MatchPreviewIntel {
+  headline: string;
+  summary: string;
+  keyQuestions: string[];
+  tacticalAngles: string[];
+  watchPlayers: string[];
+  predictedPressurePhase: string;
+}
+
+export interface PostMatchEdaCard {
+  id: string;
+  label: string;
+  value: string;
+  insight: string;
+  tone?: "neutral" | "good" | "warning";
+}
+
+export interface PostMatchIntel {
+  headline: string;
+  summary: string;
+  turningPoints: string[];
+  tacticalTakeaways: string[];
+  standoutPerformers: string[];
+  edaCards: PostMatchEdaCard[];
+}
+
 export interface VenueInfo {
   name: string;
   city: string;

@@ -5,6 +5,8 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PenSquare, Clock, Eye, MessageSquare, Search, Trophy, TrendingUp } from "lucide-react";
 import AdSlot from "@/components/ads/AdSlot";
+import CricketBallReactionButton from "@/components/blog/CricketBallReactionButton";
+import SaveBlogButton from "@/components/blog/SaveBlogButton";
 import WriterProfileCard from "@/components/writer/WriterProfileCard";
 import { ARCHETYPE_META } from "@/lib/scoring";
 
@@ -18,9 +20,12 @@ interface Blog {
   views: number;
   runs: number;
   createdAt: string;
-  author: { id: string; name: string; avatar: string | null };
-  _count: { comments: number };
+  author: { id: string; name: string; avatar: string | null; role?: string };
+  _count: { comments: number; reactions?: number; saves?: number };
   score?: { bqs: number; archetypeLabel: string } | null;
+  viewerState?: { reacted: boolean; saved: boolean };
+  reactionCount?: number;
+  saveCount?: number;
 }
 
 function getScoreColor(bqs: number): string {
@@ -42,18 +47,25 @@ export default function BlogPage() {
   const [blogs, setBlogs] = useState<Blog[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
+  const [feed, setFeed] = useState<"latest" | "for-you" | "saved">("latest");
   const matchId = searchParams.get("matchId") || "";
 
   useEffect(() => {
     fetchBlogs();
-  }, [matchId]);
+  }, [matchId, feed]);
 
   const fetchBlogs = async () => {
+    setLoading(true);
     try {
       const params = new URLSearchParams();
       if (matchId) params.set("matchId", matchId);
+      params.set("feed", feed);
       const res = await fetch(`/api/blogs${params.toString() ? `?${params.toString()}` : ""}`);
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setBlogs([]);
+        return;
+      }
       setBlogs(data.blogs || []);
     } catch {
       setBlogs([]);
@@ -84,6 +96,26 @@ export default function BlogPage() {
           </p>
         </div>
         <div className="flex gap-2">
+          <div className="hidden sm:flex items-center gap-1 rounded-lg border border-gray-800 bg-cg-dark-2 p-1">
+            {[
+              { id: "latest", label: "Latest" },
+              { id: "for-you", label: "For You" },
+              { id: "saved", label: "Saved" },
+            ].map((option) => (
+              <button
+                key={option.id}
+                type="button"
+                onClick={() => setFeed(option.id as "latest" | "for-you" | "saved")}
+                className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all ${
+                  feed === option.id
+                    ? "bg-cg-green text-black"
+                    : "text-gray-400 hover:bg-white/5 hover:text-white"
+                }`}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
           <Link
             href="/leaderboard"
             className="bg-white/5 text-white px-4 py-2.5 rounded-lg font-medium text-sm hover:bg-white/10 transition-all border border-gray-700 inline-flex items-center gap-2"
@@ -133,73 +165,93 @@ export default function BlogPage() {
             </div>
           ) : (
             filteredBlogs.map((blog) => (
-              <Link key={blog.id} href={`/blog/${blog.slug}`}>
-                <article className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 hover:border-cg-green/50 transition-all group">
-                  <div className="flex items-start gap-4">
-                    {/* BQS Score Badge */}
-                    {blog.score && (
-                      <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 ${getScoreBg(blog.score.bqs)}`}>
-                        <span className={`text-lg font-black leading-none ${getScoreColor(blog.score.bqs)}`}>
-                          {blog.score.bqs}
-                        </span>
-                        <span className="text-[8px] text-gray-500 font-medium">BQS</span>
-                      </div>
-                    )}
-                    <div className="flex-1 min-w-0">
+              <article key={blog.id} className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 hover:border-cg-green/50 transition-all group">
+                <div className="flex items-start gap-4">
+                  {blog.score && (
+                    <div className={`w-12 h-12 rounded-xl flex flex-col items-center justify-center shrink-0 ${getScoreBg(blog.score.bqs)}`}>
+                      <span className={`text-lg font-black leading-none ${getScoreColor(blog.score.bqs)}`}>
+                        {blog.score.bqs}
+                      </span>
+                      <span className="text-[8px] text-gray-500 font-medium">BQS</span>
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <Link href={`/blog/${blog.slug}`} className="block">
                       <h2 className="text-lg font-bold text-white group-hover:text-cg-green transition-colors">
                         {blog.title}
                       </h2>
                       <p className="text-gray-400 text-sm mt-1.5 line-clamp-2">
                         {blog.excerpt}
                       </p>
-                      <div className="flex flex-wrap items-center gap-4 mt-3 text-xs text-gray-500">
-                        <Link
-                          href={`/writer/${blog.author.id}`}
-                          className="text-cg-green font-medium hover:underline"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          {blog.author.name}
-                        </Link>
-                        {blog.score?.archetypeLabel && (() => {
-                          const meta = ARCHETYPE_META[blog.score.archetypeLabel];
-                          return meta ? (
-                            <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${meta.bgColor} ${meta.color}`}>
-                              {meta.icon} {meta.label}
-                            </span>
-                          ) : null;
-                        })()}
-                        <span className="flex items-center gap-1">
-                          <Clock size={12} />
-                          {new Date(blog.createdAt).toLocaleDateString()}
-                        </span>
-                        <span className="flex items-center gap-1">
-                           <Eye size={12} />
-                           {blog.views}
-                         </span>
-                         <span className="flex items-center gap-1 text-orange-400">
-                           🏏 {blog.runs ?? 0}
-                         </span>
-                        <span className="flex items-center gap-1">
-                          <MessageSquare size={12} />
-                          {blog._count.comments}
-                        </span>
+                    </Link>
+                    <div className="flex flex-wrap items-center gap-4 mt-3 text-xs text-gray-500">
+                      <Link
+                        href={`/writer/${blog.author.id}`}
+                        className="text-cg-green font-medium hover:underline"
+                      >
+                        {blog.author.name}
+                      </Link>
+                      {blog.score?.archetypeLabel && (() => {
+                        const meta = ARCHETYPE_META[blog.score.archetypeLabel];
+                        return meta ? (
+                          <span className={`inline-flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ${meta.bgColor} ${meta.color}`}>
+                            {meta.icon} {meta.label}
+                          </span>
+                        ) : null;
+                      })()}
+                      <span className="flex items-center gap-1">
+                        <Clock size={12} />
+                        {new Date(blog.createdAt).toLocaleDateString()}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <Eye size={12} />
+                        {blog.views}
+                      </span>
+                      <span className="flex items-center gap-1 text-orange-400">
+                        🏏 {blog.reactionCount ?? blog.runs ?? 0}
+                      </span>
+                      <span className="flex items-center gap-1">
+                        <MessageSquare size={12} />
+                        {blog._count.comments}
+                      </span>
+                    </div>
+                    {blog.tags && (
+                      <div className="flex flex-wrap gap-1 mt-3">
+                        {blog.tags.split(",").map((tag) => (
+                          <span
+                            key={tag}
+                            className="bg-gray-800 text-gray-400 text-[10px] px-2 py-0.5 rounded-full"
+                          >
+                            #{tag.trim()}
+                          </span>
+                        ))}
                       </div>
-                      {blog.tags && (
-                        <div className="flex flex-wrap gap-1 mt-3">
-                          {blog.tags.split(",").map((tag) => (
-                            <span
-                              key={tag}
-                              className="bg-gray-800 text-gray-400 text-[10px] px-2 py-0.5 rounded-full"
-                            >
-                              #{tag.trim()}
-                            </span>
-                          ))}
-                        </div>
-                      )}
+                    )}
+                    <div className="mt-4 flex flex-wrap items-center gap-2">
+                      <CricketBallReactionButton
+                        slug={blog.slug}
+                        initialCount={blog.reactionCount ?? blog.runs ?? 0}
+                        initialReacted={Boolean(blog.viewerState?.reacted)}
+                        compact
+                        loginHref={`/auth/login?redirect=/blog/${blog.slug}`}
+                      />
+                      <SaveBlogButton
+                        slug={blog.slug}
+                        initialSaved={Boolean(blog.viewerState?.saved)}
+                        initialCount={blog.saveCount ?? blog._count.saves ?? 0}
+                        compact
+                        loginHref={`/auth/login?redirect=/blog/${blog.slug}`}
+                      />
+                      <Link
+                        href={`/blog/${blog.slug}`}
+                        className="inline-flex items-center gap-2 rounded-full border border-gray-700 bg-white/5 px-3 py-1.5 text-xs font-semibold text-white hover:bg-white/10"
+                      >
+                        Read Match Story
+                      </Link>
                     </div>
                   </div>
-                </article>
-              </Link>
+                </div>
+              </article>
             ))
           )}
         </div>
@@ -243,8 +295,8 @@ export default function BlogPage() {
           <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white mb-2">What is BQS?</h3>
             <p className="text-gray-400 text-xs leading-relaxed">
-              Blog Quality Score (BQS) is our AI-powered scoring system. Each blog is analyzed for originality,
-              coherence, stat accuracy, tone, and constructiveness by 6 different AI models to produce a score from 0-100.
+              Blog Quality Score (BQS) is our Qwen-powered cricket writing engine. Each blog is checked for originality,
+              coherence, constructiveness, stat quality, negativity-versus-toxicity, and paragraph-level clarity before a final 0-100 score is assembled.
             </p>
             <Link href="/leaderboard" className="text-cg-green text-xs font-medium mt-2 inline-block hover:underline">
               View Leaderboard →
@@ -254,10 +306,11 @@ export default function BlogPage() {
           <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white mb-2">Blog Guidelines</h3>
             <ul className="text-gray-400 text-xs space-y-1">
-              <li>• Posts must be 120–200 words</li>
+              <li>• Posts must be 50–2000 words</li>
               <li>• Cricket-related content only</li>
               <li>• No hate speech or personal attacks</li>
-              <li>• AI scoring happens automatically</li>
+              <li>• Borderline toxic or spammy writing is blocked</li>
+              <li>• Cricket-ball reactions and saves help shape your feed</li>
               <li>• Higher BQS → higher leaderboard rank</li>
             </ul>
           </div>

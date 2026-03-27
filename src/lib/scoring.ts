@@ -1,21 +1,18 @@
 /**
  * CricGeek AI Scoring Pipeline
  *
- * Calls the Python AI microservice for real HuggingFace model scoring.
- * Falls back to heuristic scoring if the service is unavailable.
+ * Production path:
+ * 1. Local pre-processing
+ * 2. Qwen (via Ollama) structured sports-writing analysis
+ * 3. Deterministic BQS assembly and moderation override logic
+ * 4. Persisted explanation JSON + paragraph scores for user-visible breakdowns
  *
- * Pipeline steps (mirrored from PDF spec):
- * 1. Pre-processing (lexical diversity, sentence variety, completeness)
- * 2. BART-MNLI archetype classification (Fan/Analyst/Storyteller/Debater)
- * 3. RoBERTa tone → constructiveness score
- * 4. Toxic-BERT toxicity score
- * 5. MiniLM coherence + originality via sentence embeddings
- * 6. NER entity extraction + stat accuracy
- * 7. Rule engine + BQS assembly with archetype-specific weights
+ * Fallback path:
+ * - Heuristic scoring when Ollama is unavailable
  */
 
-// ── AI Service URL ───────────────────────────────────────────────────
-const AI_SERVICE_URL = process.env.AI_SERVICE_URL ?? "http://localhost:8000";
+const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+const OLLAMA_BQS_MODEL = process.env.OLLAMA_BQS_MODEL || process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -33,11 +30,33 @@ export interface PreProcessResult {
 
 export interface ModelScores {
   toneScore: number;
+  negativityScore: number;
   toxicityScore: number;
   originalityScore: number;
   coherenceScore: number;
   archetypeLabel: Archetype;
   archetypeConfidence: number;
+}
+
+export interface ParagraphScore {
+  paragraphIndex: number;
+  excerpt: string;
+  overall: number;
+  constructiveness: number;
+  negativity: number;
+  toxicity: number;
+  evidence: number;
+  coherence: number;
+  note: string;
+}
+
+export interface ExplanationJson {
+  summary: string;
+  strengths: string[];
+  concerns: string[];
+  negativityVsToxicity: string;
+  penaltyDecision: string;
+  userVisibleBreakdown: string[];
 }
 
 export interface NERResult {
@@ -55,6 +74,8 @@ export interface RuleEngineResult {
   repetitionPenalty: number;
   completeness: number;
   argumentLogic: number;
+  toxicityPenaltyApplied: boolean;
+  toxicityPenaltyOverride: boolean;
 }
 
 export interface BlogScoreResult {
@@ -63,9 +84,12 @@ export interface BlogScoreResult {
   modelScores: ModelScores;
   nerResult: NERResult;
   ruleEngine: RuleEngineResult;
+  paragraphScores: ParagraphScore[];
+  explanation: ExplanationJson;
   statsVerified: number;
   statAccuracy: number;
   processingTimeMs: number;
+  scoreVersion: string;
 }
 
 // ── Archetype Weight Tables (PDF spec) ──────────────────────────────
@@ -153,12 +177,13 @@ export function preProcess(text: string): PreProcessResult {
   };
 }
 
-// ── Step 2-6: Call Python AI service ────────────────────────────────
+// ── Step 2-6: Call Ollama (Qwen) ───────────────────────────────────
 
-interface AIServiceResponse {
+interface OllamaScoreResponse {
   archetype: Archetype;
   archetype_confidence: number;
   tone_score: number;
+  negativity_score: number;
   toxicity_score: number;
   originality_score: number;
   coherence_score: number;
@@ -177,38 +202,167 @@ interface AIServiceResponse {
   word_count: number;
   lexical_diversity: number;
   sentence_variety: number;
-  bqs: number;
+  paragraph_scores?: Array<{
+    paragraph_index?: number;
+    excerpt?: string;
+    overall?: number;
+    constructiveness?: number;
+    negativity?: number;
+    toxicity?: number;
+    evidence?: number;
+    coherence?: number;
+    note?: string;
+  }>;
+  explanation?: {
+    summary?: string;
+    strengths?: string[];
+    concerns?: string[];
+    negativity_vs_toxicity?: string;
+    penalty_decision?: string;
+    user_visible_breakdown?: string[];
+  };
 }
 
-async function callAIService(text: string): Promise<AIServiceResponse | null> {
+function clampScore(value: unknown, fallback = 0): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(value * 10) / 10));
+}
+
+function clampUnit(value: unknown, fallback = 0.5): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return fallback;
+  return Math.max(0, Math.min(1, Math.round(value * 1000) / 1000));
+}
+
+function safeStringList(value: unknown, limit = 4): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string").slice(0, limit)
+    : [];
+}
+
+function excerptForParagraph(paragraph: string): string {
+  return paragraph.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+async function callOllamaScorer(input: { title?: string; content: string }): Promise<OllamaScoreResponse | null> {
+  const paragraphs = input.content
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+
+  const prompt = `You are CricGeek's sports-writing quality analyst.
+Return strict JSON only. Do not wrap in markdown.
+
+Score this cricket article on a 0-100 scale for each dimension.
+Important moderation rule:
+- Strong criticism or disappointment is NEGATIVITY, not toxicity.
+- Toxicity means insults, abuse, dehumanisation, slurs, harassment, or targeted hostility.
+- If the article is sharp but evidence-based and constructive, keep toxicity low.
+
+Use these archetypes only: analyst, fan, storyteller, debater.
+
+Return JSON with exactly these keys:
+{
+  "archetype": "analyst|fan|storyteller|debater",
+  "archetype_confidence": 0.0,
+  "tone_score": 0,
+  "negativity_score": 0,
+  "toxicity_score": 0,
+  "originality_score": 0,
+  "coherence_score": 0,
+  "constructiveness": 0,
+  "evidence_presence": 0,
+  "counter_acknowledge": 0,
+  "position_clarity": 0,
+  "info_density": 0,
+  "repetition_penalty": 0,
+  "completeness": 0,
+  "argument_logic": 0,
+  "stat_accuracy": 0,
+  "entities_found": 0,
+  "stats_found": 0,
+  "stats_verified": 0,
+  "word_count": 0,
+  "lexical_diversity": 0,
+  "sentence_variety": 0,
+  "paragraph_scores": [
+    {
+      "paragraph_index": 0,
+      "excerpt": "",
+      "overall": 0,
+      "constructiveness": 0,
+      "negativity": 0,
+      "toxicity": 0,
+      "evidence": 0,
+      "coherence": 0,
+      "note": ""
+    }
+  ],
+  "explanation": {
+    "summary": "",
+    "strengths": ["", "", ""],
+    "concerns": ["", "", ""],
+    "negativity_vs_toxicity": "",
+    "penalty_decision": "",
+    "user_visible_breakdown": ["", "", ""]
+  }
+}
+
+Title: ${input.title || "Untitled"}
+Paragraphs:
+${paragraphs.map((paragraph, index) => `[${index}] ${paragraph}`).join("\n\n")}`;
+
   try {
-    const res = await fetch(`${AI_SERVICE_URL}/score`, {
+    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
+      body: JSON.stringify({
+        model: OLLAMA_BQS_MODEL,
+        prompt,
+        format: "json",
+        stream: false,
+        options: {
+          temperature: 0.15,
+          top_p: 0.85,
+          num_predict: 800,
+        },
+      }),
       signal: AbortSignal.timeout(30_000), // 30s timeout
     });
-    if (!res.ok) return null;
-    return res.json() as Promise<AIServiceResponse>;
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      console.warn("[scoring] Ollama scorer error:", errorText);
+      return null;
+    }
+
+    const data = (await res.json()) as { response?: string };
+    if (!data.response) return null;
+    return JSON.parse(data.response) as OllamaScoreResponse;
   } catch {
-    console.warn("[scoring] AI service unavailable — using heuristic fallback");
+    console.warn("[scoring] Ollama scorer unavailable — using heuristic fallback");
     return null;
   }
 }
 
 // ── Heuristic Fallback (when AI service is offline) ──────────────────
 
-function heuristicScore(text: string, pp: PreProcessResult): AIServiceResponse {
+function heuristicScore(text: string, pp: PreProcessResult): OllamaScoreResponse {
   const words = text.toLowerCase().split(/\s+/);
   const wc = words.length;
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
 
   const positiveTerms = ["excellent", "brilliant", "impressive", "dominant", "outstanding"];
-  const negativeTerms = ["terrible", "worst", "awful", "disaster", "pathetic"];
+  const negativeTerms = ["terrible", "worst", "awful", "disaster", "poor", "sloppy", "frustrating", "disappointing"];
   const toxicPatterns = ["idiot", "stupid", "trash", "garbage", "loser", "hate"];
 
   const posHits = words.filter((w) => positiveTerms.includes(w)).length;
   const negHits = words.filter((w) => negativeTerms.includes(w)).length;
   const toneScore = Math.min(100, Math.round(((posHits + 1) / (posHits + negHits + 2)) * 80 + 10));
+  const negativityScore = Math.min(100, Math.round((negHits / Math.max(wc, 1)) * 600 + 18));
   const toxicHits = words.filter((w) => toxicPatterns.some((p) => w.includes(p))).length;
   const toxicityScore = Math.min(100, Math.round((toxicHits / Math.max(wc, 1)) * 400 + 2));
 
@@ -236,22 +390,11 @@ function heuristicScore(text: string, pp: PreProcessResult): AIServiceResponse {
   const infoDensity = Math.min(100, Math.round((wc / Math.max(pp.sentenceCount, 1)) * 4));
   const evidencePresence = Math.min(100, 20 + Math.random() * 30);
 
-  const bqs = Math.min(
-    100,
-    Math.round(
-      toneScore * 0.2 +
-      (100 - toxicityScore) * 0.15 +
-      originalityScore * 0.15 +
-      coherenceScore * 0.15 +
-      constructiveness * 0.2 +
-      argumentLogic * 0.15
-    )
-  );
-
   return {
     archetype: bestArchetype,
     archetype_confidence: 0.5,
     tone_score: toneScore,
+    negativity_score: negativityScore,
     toxicity_score: toxicityScore,
     originality_score: originalityScore,
     coherence_score: coherenceScore,
@@ -270,24 +413,250 @@ function heuristicScore(text: string, pp: PreProcessResult): AIServiceResponse {
     word_count: pp.wordCount,
     lexical_diversity: pp.lexicalDiversity,
     sentence_variety: pp.sentenceVariety,
-    bqs,
+    paragraph_scores: paragraphs.map((paragraph, index) => ({
+      paragraph_index: index,
+      excerpt: excerptForParagraph(paragraph),
+      overall: Math.round((constructiveness + coherenceScore + originalityScore) / 3),
+      constructiveness,
+      negativity: negativityScore,
+      toxicity: toxicityScore,
+      evidence: evidencePresence,
+      coherence: coherenceScore,
+      note: toxicityScore > 45 ? "Tone is getting personal." : "Mostly cricket-focused analysis.",
+    })),
+    explanation: {
+      summary: "Fallback heuristic analysis used because Ollama was unavailable.",
+      strengths: [
+        originalityScore > 65 ? "Varied vocabulary adds freshness." : "Readable cricket writing structure.",
+        constructiveness > 60 ? "Reasoning language improves constructiveness." : "Opinion is clear enough to follow.",
+        coherenceScore > 70 ? "Overall flow remains coherent." : "Paragraph flow is serviceable.",
+      ],
+      concerns: [
+        toxicityScore > 40 ? "Hostile wording is dragging the score down." : "Evidence could be more specific.",
+        negativityScore > 55 ? "The piece leans negative in tone." : "There is room for stronger counter-points.",
+        "Fallback mode has lower confidence than the Ollama path.",
+      ],
+      negativity_vs_toxicity:
+        negativityScore > toxicityScore
+          ? "The article is more critical than abusive."
+          : "Negative tone and toxicity are close together here.",
+      penalty_decision:
+        toxicityScore > 55
+          ? "A full toxicity penalty was applied."
+          : "Only a light toxicity penalty was applied.",
+      user_visible_breakdown: [
+        `Constructiveness ${constructiveness}/100`,
+        `Negativity ${negativityScore}/100`,
+        `Toxicity ${toxicityScore}/100`,
+      ],
+    },
+  };
+}
+
+function countVerifiedStats(text: string) {
+  const matches = text.match(/\b\d+(\.\d+)?\b/g) ?? [];
+  const cricketTerms = ["average", "strike rate", "economy", "runs", "wickets", "overs", "balls"];
+  const statsFound = matches.length;
+  const contextHits = cricketTerms.filter((term) => text.toLowerCase().includes(term)).length;
+  const statsVerified = Math.min(statsFound, Math.round(statsFound * 0.65 + contextHits * 0.35));
+  const statAccuracy = statsFound === 0 ? 75 : Math.min(100, Math.round((statsVerified / statsFound) * 100));
+
+  return { statsFound, statsVerified, statAccuracy };
+}
+
+function normaliseParagraphScores(
+  value: OllamaScoreResponse["paragraph_scores"],
+  paragraphs: string[],
+  fallbackScores: ReturnType<typeof heuristicScore>
+): ParagraphScore[] {
+  const fallback = fallbackScores.paragraph_scores ?? [];
+
+  return paragraphs.map((paragraph, index) => {
+    const source = value?.find((entry) => entry.paragraph_index === index) ?? fallback[index];
+
+    return {
+      paragraphIndex: index,
+      excerpt: typeof source?.excerpt === "string" && source.excerpt.trim().length > 0
+        ? source.excerpt.trim().slice(0, 120)
+        : excerptForParagraph(paragraph),
+      overall: clampScore(source?.overall, 60),
+      constructiveness: clampScore(source?.constructiveness, 55),
+      negativity: clampScore(source?.negativity, 30),
+      toxicity: clampScore(source?.toxicity, 8),
+      evidence: clampScore(source?.evidence, 40),
+      coherence: clampScore(source?.coherence, 60),
+      note: typeof source?.note === "string" && source.note.trim().length > 0
+        ? source.note.trim().slice(0, 160)
+        : "Paragraph-level read generated from the scoring engine.",
+    };
+  });
+}
+
+function buildExplanation(
+  model: ModelScores,
+  ruleEngine: Omit<RuleEngineResult, "toxicityPenaltyApplied" | "toxicityPenaltyOverride">,
+  moderation: { penaltyApplied: boolean; overrideApplied: boolean },
+  aiExplanation: OllamaScoreResponse["explanation"] | undefined
+): ExplanationJson {
+  const defaultBreakdown = [
+    `Constructiveness ${Math.round(ruleEngine.constructiveness)}/100`,
+    `Negativity ${Math.round(model.negativityScore)}/100`,
+    `Toxicity ${Math.round(model.toxicityScore)}/100`,
+  ];
+
+  return {
+    summary:
+      aiExplanation?.summary?.trim() ||
+      "This score weighs clarity, evidence, constructiveness, originality, and safe discourse.",
+    strengths:
+      safeStringList(aiExplanation?.strengths, 4).length > 0
+        ? safeStringList(aiExplanation?.strengths, 4)
+        : [
+            ruleEngine.constructiveness >= 70 ? "Constructive reasoning supports the argument." : "The stance is understandable.",
+            model.coherenceScore >= 70 ? "The writing stays coherent from paragraph to paragraph." : "The article keeps a usable flow.",
+            model.originalityScore >= 70 ? "The phrasing feels distinct rather than boilerplate." : "There is at least some original framing.",
+          ],
+    concerns:
+      safeStringList(aiExplanation?.concerns, 4).length > 0
+        ? safeStringList(aiExplanation?.concerns, 4)
+        : [
+            model.toxicityScore >= 45 ? "The wording moves toward personal hostility." : "Some claims could use stronger support.",
+            model.negativityScore >= 60 ? "The tone is strongly negative, even if not fully toxic." : "Counter-arguments are underdeveloped.",
+            ruleEngine.evidencePresence < 55 ? "Evidence density is lower than ideal for a top score." : "There is still room for sharper proof points.",
+          ],
+    negativityVsToxicity:
+      aiExplanation?.negativity_vs_toxicity?.trim() ||
+      (model.negativityScore > model.toxicityScore
+        ? "The system detected critical or frustrated language, but that is not automatically treated as toxicity."
+        : "The system saw negative language that overlaps with abusive phrasing, so toxicity was weighted more heavily."),
+    penaltyDecision:
+      aiExplanation?.penalty_decision?.trim() ||
+      (moderation.overrideApplied
+        ? "A reduced toxicity penalty was used because the piece stayed constructive and evidence-led."
+        : moderation.penaltyApplied
+          ? "A toxicity penalty was applied because hostile language outweighed the article's constructive value."
+          : "No heavy toxicity penalty was needed because negativity remained within acceptable debate."),
+    userVisibleBreakdown:
+      safeStringList(aiExplanation?.user_visible_breakdown, 5).length > 0
+        ? safeStringList(aiExplanation?.user_visible_breakdown, 5)
+        : defaultBreakdown,
+  };
+}
+
+function resolveModerationPenalty(model: ModelScores, ruleEngine: Omit<RuleEngineResult, "toxicityPenaltyApplied" | "toxicityPenaltyOverride">) {
+  const clearToxicity = model.toxicityScore >= 65;
+  const borderlineToxicity = model.toxicityScore >= 25 && model.toxicityScore < 65;
+  const overrideApplied =
+    borderlineToxicity &&
+    model.negativityScore >= model.toxicityScore &&
+    ruleEngine.constructiveness >= 68 &&
+    ruleEngine.evidencePresence >= 58 &&
+    ruleEngine.counterAcknowledge >= 35;
+
+  const effectiveToxicity = overrideApplied
+    ? model.toxicityScore * 0.35
+    : model.toxicityScore;
+  const penaltyApplied = clearToxicity || model.toxicityScore >= 28;
+
+  return {
+    effectiveToxicity,
+    penaltyApplied,
+    overrideApplied,
+  };
+}
+
+function computeBQS(
+  model: ModelScores,
+  ruleEngine: Omit<RuleEngineResult, "toxicityPenaltyApplied" | "toxicityPenaltyOverride">,
+  statAccuracy: number,
+  archetype: Archetype
+) {
+  const weights = ARCHETYPE_WEIGHTS[archetype];
+  const moderation = resolveModerationPenalty(model, ruleEngine);
+  const toxicityInv = 100 - moderation.effectiveToxicity;
+  const negativityAdjustment = model.negativityScore > 70 && model.toxicityScore < 20 ? 4 : 0;
+
+  let score =
+    ruleEngine.constructiveness * weights.constructiveness +
+    toxicityInv * weights.toxicityInv +
+    model.originalityScore * weights.originalityScore +
+    statAccuracy * weights.statAccuracy +
+    ruleEngine.infoDensity * weights.infoDensity +
+    model.coherenceScore * weights.coherenceScore +
+    ruleEngine.argumentLogic * weights.argumentLogic;
+
+  score += ruleEngine.evidencePresence * 0.05;
+  score += ruleEngine.positionClarity * 0.05;
+  score -= ruleEngine.repetitionPenalty * 0.04;
+  score += negativityAdjustment;
+
+  if (!moderation.overrideApplied && model.toxicityScore >= 70) {
+    score -= 12;
+  } else if (!moderation.overrideApplied && model.toxicityScore >= 45) {
+    score -= 6;
+  }
+
+  return {
+    bqs: Math.max(0, Math.min(100, Math.round(score))),
+    moderation,
   };
 }
 
 // ── Full Pipeline ────────────────────────────────────────────────────
 
-export async function runScoringPipeline(text: string): Promise<BlogScoreResult> {
+export async function runScoringPipeline(input: string | { title?: string; content: string }): Promise<BlogScoreResult> {
   const started = Date.now();
+  const payload = typeof input === "string" ? { content: input } : input;
+  const text = payload.content;
 
   // Step 1: Pre-process (always local)
   const pp = preProcess(text);
+  const statMetrics = countVerifiedStats(text);
+  const fallback = heuristicScore(text, pp);
 
-  // Steps 2–7: Try AI service, fall back to heuristics
-  const aiResult = await callAIService(text);
-  const r = aiResult ?? heuristicScore(text, pp);
+  // Steps 2–7: Try Ollama, fall back to heuristics
+  const aiResult = await callOllamaScorer(payload);
+  const r = aiResult ?? fallback;
+  const paragraphs = text
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  const modelScores: ModelScores = {
+    toneScore: clampScore(r.tone_score, fallback.tone_score),
+    negativityScore: clampScore(r.negativity_score, fallback.negativity_score),
+    toxicityScore: clampScore(r.toxicity_score, fallback.toxicity_score),
+    originalityScore: clampScore(r.originality_score, fallback.originality_score),
+    coherenceScore: clampScore(r.coherence_score, fallback.coherence_score),
+    archetypeLabel: (["analyst", "fan", "storyteller", "debater"].includes(r.archetype)
+      ? r.archetype
+      : fallback.archetype) as Archetype,
+    archetypeConfidence: clampUnit(r.archetype_confidence, fallback.archetype_confidence),
+  };
+
+  const ruleEngineBase = {
+    constructiveness: clampScore(r.constructiveness, fallback.constructiveness),
+    evidencePresence: clampScore(r.evidence_presence, fallback.evidence_presence),
+    counterAcknowledge: clampScore(r.counter_acknowledge, fallback.counter_acknowledge),
+    positionClarity: clampScore(r.position_clarity, fallback.position_clarity),
+    infoDensity: clampScore(r.info_density, fallback.info_density),
+    repetitionPenalty: clampScore(r.repetition_penalty, fallback.repetition_penalty),
+    completeness: clampScore(Math.max(r.completeness || 0, pp.completeness), Math.max(fallback.completeness, pp.completeness)),
+    argumentLogic: clampScore(r.argument_logic, fallback.argument_logic),
+  };
+
+  const { bqs, moderation } = computeBQS(
+    modelScores,
+    ruleEngineBase,
+    clampScore(r.stat_accuracy, statMetrics.statAccuracy),
+    modelScores.archetypeLabel
+  );
+
+  const paragraphScores = normaliseParagraphScores(r.paragraph_scores, paragraphs, fallback);
+  const explanation = buildExplanation(modelScores, ruleEngineBase, moderation, r.explanation);
 
   return {
-    bqs: r.bqs,
+    bqs,
     preProcess: {
       wordCount: pp.wordCount,
       sentenceCount: pp.sentenceCount,
@@ -297,32 +666,23 @@ export async function runScoringPipeline(text: string): Promise<BlogScoreResult>
       avgSentenceLength: pp.avgSentenceLength,
       completeness: r.completeness,
     },
-    modelScores: {
-      toneScore: r.tone_score,
-      toxicityScore: r.toxicity_score,
-      originalityScore: r.originality_score,
-      coherenceScore: r.coherence_score,
-      archetypeLabel: r.archetype,
-      archetypeConfidence: r.archetype_confidence,
-    },
+    modelScores,
     nerResult: {
       entities: [],
       statsFound: [],
-      cricketDepth: r.info_density,
+      cricketDepth: ruleEngineBase.infoDensity,
     },
     ruleEngine: {
-      constructiveness: r.constructiveness,
-      evidencePresence: r.evidence_presence,
-      counterAcknowledge: r.counter_acknowledge,
-      positionClarity: r.position_clarity,
-      infoDensity: r.info_density,
-      repetitionPenalty: r.repetition_penalty,
-      completeness: r.completeness,
-      argumentLogic: r.argument_logic,
+      ...ruleEngineBase,
+      toxicityPenaltyApplied: moderation.penaltyApplied,
+      toxicityPenaltyOverride: moderation.overrideApplied,
     },
-    statsVerified: r.stats_verified,
-    statAccuracy: r.stat_accuracy,
+    paragraphScores,
+    explanation,
+    statsVerified: Math.max(statMetrics.statsVerified, r.stats_verified ?? 0),
+    statAccuracy: Math.max(clampScore(r.stat_accuracy, statMetrics.statAccuracy), statMetrics.statAccuracy),
     processingTimeMs: Date.now() - started,
+    scoreVersion: "qwen3.5-v1",
   };
 }
 

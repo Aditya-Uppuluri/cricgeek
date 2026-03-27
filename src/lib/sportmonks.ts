@@ -14,7 +14,7 @@
  * doesn't need any changes.
  */
 
-import { Match, Score, TeamInfo } from "@/types/cricket";
+import { BattingEntry, BowlingEntry, Match, Score, Scorecard, TeamInfo } from "@/types/cricket";
 
 const BASE_URL =
   process.env.SPORTMONKS_BASE_URL ||
@@ -89,6 +89,10 @@ export interface SMFixture {
   localteam?: SMTeam;
   visitorteam?: SMTeam;
   runs?: SMRun[];
+  scorecards?: unknown;
+  scorecard?: unknown;
+  batting?: unknown;
+  bowling?: unknown;
   league?: SMLeague;
   venue?: SMVenue;
 }
@@ -310,6 +314,74 @@ export async function getSMFixture(id: string): Promise<Match | null> {
 
   if (!data) return null;
   return normaliseFixture(data);
+}
+
+function normaliseBattingRow(row: Record<string, unknown>): BattingEntry {
+  return {
+    batsman: {
+      id: String(row.player_id ?? row.playerId ?? row.id ?? row.batsman_id ?? row.batsmanId ?? "unknown"),
+      name: String(row.player_name ?? row.playerName ?? row.batsman ?? row.name ?? "Unknown Batter"),
+    },
+    dismissal: String(row.result ?? row.dismissal ?? row.how_out ?? row.howOut ?? "batting"),
+    r: Number(row.score ?? row.runs ?? row.r ?? 0),
+    b: Number(row.ball ?? row.balls ?? row.b ?? 0),
+    "4s": Number(row.four_x ?? row.fours ?? row["4s"] ?? 0),
+    "6s": Number(row.six_x ?? row.sixes ?? row["6s"] ?? 0),
+    sr: String(row.rate ?? row.strike_rate ?? row.strikeRate ?? "0"),
+  };
+}
+
+function normaliseBowlingRow(row: Record<string, unknown>): BowlingEntry {
+  return {
+    bowler: {
+      id: String(row.player_id ?? row.playerId ?? row.id ?? row.bowler_id ?? row.bowlerId ?? "unknown"),
+      name: String(row.player_name ?? row.playerName ?? row.bowler ?? row.name ?? "Unknown Bowler"),
+    },
+    o: Number(row.overs ?? row.o ?? 0),
+    m: Number(row.maidens ?? row.m ?? 0),
+    r: Number(row.runs ?? row.r ?? 0),
+    w: Number(row.wickets ?? row.w ?? 0),
+    eco: String(row.rate ?? row.econ_rate ?? row.economy ?? row.eco ?? "0"),
+  };
+}
+
+function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
+  const inningsSource =
+    (Array.isArray(fixture.scorecards) ? fixture.scorecards : null) ||
+    (Array.isArray(fixture.scorecard) ? fixture.scorecard : null);
+
+  if (!inningsSource) {
+    return null;
+  }
+
+  const parsed = inningsSource
+    .map((inning, index) => {
+      const raw = inning as Record<string, unknown>;
+      const battingRows = Array.isArray(raw.batting) ? raw.batting : [];
+      const bowlingRows = Array.isArray(raw.bowling) ? raw.bowling : [];
+
+      return {
+        inning: String(raw.name ?? raw.inning ?? `Innings ${index + 1}`),
+        totalRuns: Number(raw.score ?? raw.total_runs ?? raw.totalRuns ?? 0),
+        totalWickets: Number(raw.wickets ?? raw.total_wickets ?? raw.totalWickets ?? 0),
+        totalOvers: Number(raw.overs ?? raw.total_overs ?? raw.totalOvers ?? 0),
+        extras: String(raw.extras ?? ""),
+        batting: battingRows.map((row) => normaliseBattingRow(row as Record<string, unknown>)),
+        bowling: bowlingRows.map((row) => normaliseBowlingRow(row as Record<string, unknown>)),
+      };
+    })
+    .filter((inning) => inning.batting.length > 0 || inning.bowling.length > 0 || inning.totalRuns > 0);
+
+  return parsed.length > 0 ? parsed : null;
+}
+
+export async function getSMScorecard(id: string): Promise<Scorecard[] | null> {
+  const data = await smFetch<SMFixture>(`/fixtures/${id}`, {
+    include: `${INCLUDES},scorecards`,
+  }, 20);
+
+  if (!data) return null;
+  return parseSportMonksScorecards(data);
 }
 
 /**

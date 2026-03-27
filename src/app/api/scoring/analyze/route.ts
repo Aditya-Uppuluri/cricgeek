@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import {
   runScoringPipeline,
@@ -36,7 +37,10 @@ export async function POST(req: NextRequest) {
     });
 
     // ── Run the 7-step scoring pipeline ─────────────────────────────
-    const result = await runScoringPipeline(blog.content);
+    const result = await runScoringPipeline({
+      title: blog.title,
+      content: blog.content,
+    });
 
     // ── Save BlogScore ───────────────────────────────────────────────
     const blogScore = await prisma.blogScore.upsert({
@@ -45,6 +49,7 @@ export async function POST(req: NextRequest) {
         blogId,
         bqs: result.bqs,
         toneScore: result.modelScores.toneScore,
+        negativityScore: result.modelScores.negativityScore,
         toxicityScore: result.modelScores.toxicityScore,
         originalityScore: result.modelScores.originalityScore,
         coherenceScore: result.modelScores.coherenceScore,
@@ -61,6 +66,11 @@ export async function POST(req: NextRequest) {
         infoDensity: result.ruleEngine.infoDensity,
         repetitionPenalty: result.ruleEngine.repetitionPenalty,
         completeness: result.ruleEngine.completeness,
+        paragraphScores: result.paragraphScores as unknown as Prisma.JsonArray,
+        explanationJson: result.explanation as unknown as Prisma.JsonObject,
+        toxicityPenaltyApplied: result.ruleEngine.toxicityPenaltyApplied,
+        toxicityPenaltyOverride: result.ruleEngine.toxicityPenaltyOverride,
+        scoreVersion: result.scoreVersion,
         wordCount: result.preProcess.wordCount,
         lexicalDiversity: result.preProcess.lexicalDiversity,
         sentenceVariety: result.preProcess.sentenceVariety,
@@ -70,6 +80,7 @@ export async function POST(req: NextRequest) {
       update: {
         bqs: result.bqs,
         toneScore: result.modelScores.toneScore,
+        negativityScore: result.modelScores.negativityScore,
         toxicityScore: result.modelScores.toxicityScore,
         originalityScore: result.modelScores.originalityScore,
         coherenceScore: result.modelScores.coherenceScore,
@@ -86,6 +97,11 @@ export async function POST(req: NextRequest) {
         infoDensity: result.ruleEngine.infoDensity,
         repetitionPenalty: result.ruleEngine.repetitionPenalty,
         completeness: result.ruleEngine.completeness,
+        paragraphScores: result.paragraphScores as unknown as Prisma.JsonArray,
+        explanationJson: result.explanation as unknown as Prisma.JsonObject,
+        toxicityPenaltyApplied: result.ruleEngine.toxicityPenaltyApplied,
+        toxicityPenaltyOverride: result.ruleEngine.toxicityPenaltyOverride,
+        scoreVersion: result.scoreVersion,
         wordCount: result.preProcess.wordCount,
         lexicalDiversity: result.preProcess.lexicalDiversity,
         sentenceVariety: result.preProcess.sentenceVariety,
@@ -108,6 +124,7 @@ export async function POST(req: NextRequest) {
     const avgStatAccuracy =
       allScores.reduce((sum, s) => sum + s.statAccuracy, 0) / allScores.length;
     const avgDepth = allScores.reduce((sum, s) => sum + s.infoDensity, 0) / allScores.length;
+    const totalBlogs = allScores.length;
 
     // Streak stays as-is for now (incremented separately via weekly job)
     const streak = existingProfile?.streak ?? 0;
@@ -127,7 +144,7 @@ export async function POST(req: NextRequest) {
       create: {
         userId: blog.authorId,
         averageBQS: Math.round(avgBQS * 10) / 10,
-        totalBlogs: 1,
+        totalBlogs,
         archetype: result.modelScores.archetypeLabel,
         writerTitle: calculateWriterTitle({ analyst: 25, fan: 25, storyteller: 25, debater: 25 }),
         bestBQS: result.bqs,
@@ -137,7 +154,7 @@ export async function POST(req: NextRequest) {
         level,
       },
       update: {
-        totalBlogs: { increment: 1 },
+        totalBlogs,
         averageBQS: Math.round(avgBQS * 10) / 10,
         archetype: result.modelScores.archetypeLabel,
         bestBQS: { set: Math.max(existingProfile?.bestBQS ?? 0, result.bqs) },
@@ -181,7 +198,6 @@ export async function POST(req: NextRequest) {
       where: { userId: blog.authorId },
     });
     const earnedBadgeIds = existingBadges.map((b) => b.badge);
-    const totalBlogs = allScores.length;
     const highScores80 = allScores.filter((s) => s.bqs >= 80).length;
 
     const badgesToAward = BADGE_DEFINITIONS.filter((def) => {
@@ -266,6 +282,8 @@ export async function POST(req: NextRequest) {
       score: blogScore,
       bqs: result.bqs,
       archetype: result.modelScores.archetypeLabel,
+      explanation: result.explanation,
+      paragraphScores: result.paragraphScores,
       writerTitle,
       bcs: newBCS,
     });

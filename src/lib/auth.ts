@@ -15,6 +15,36 @@ async function ensureOAuthUser(email: string, name?: string | null, image?: stri
       data: {
         name: name || existingUser.name,
         avatar: image || existingUser.avatar,
+        writerProfile: {
+          upsert: {
+            create: {
+              averageBQS: 0,
+              totalBlogs: 0,
+              totalViews: 0,
+              archetype: "fan",
+              level: 1,
+              xp: 0,
+            },
+            update: {},
+          },
+        },
+        writerDNA: {
+          upsert: {
+            create: {
+              analyst: 25,
+              fan: 25,
+              storyteller: 25,
+              debater: 25,
+            },
+            update: {},
+          },
+        },
+        feedPreferences: {
+          upsert: {
+            create: {},
+            update: {},
+          },
+        },
       },
     });
 
@@ -29,6 +59,7 @@ async function ensureOAuthUser(email: string, name?: string | null, image?: stri
       email,
       avatar: image || null,
       password: placeholderPassword,
+      role: "user",
       writerProfile: {
         create: {
           averageBQS: 0,
@@ -46,6 +77,9 @@ async function ensureOAuthUser(email: string, name?: string | null, image?: stri
           storyteller: 25,
           debater: 25,
         },
+      },
+      feedPreferences: {
+        create: {},
       },
     },
   });

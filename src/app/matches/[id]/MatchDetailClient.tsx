@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { Match, Scorecard, Commentary, Squad } from "@/types/cricket";
 import ScorecardTable from "@/components/matches/ScorecardTable";
 import CommentaryFeed from "@/components/matches/CommentaryFeed";
@@ -15,6 +16,7 @@ interface MatchDetailClientProps {
   scorecard: Scorecard[] | null;
   commentary: Commentary | null;
   squads: Squad[] | null;
+  initialTab?: Tab;
 }
 
 export default function MatchDetailClient({
@@ -22,8 +24,9 @@ export default function MatchDetailClient({
   scorecard,
   commentary,
   squads,
+  initialTab = "scorecard",
 }: MatchDetailClientProps) {
-  const [activeTab, setActiveTab] = useState<Tab>("scorecard");
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
   const isLive = match.matchStarted && !match.matchEnded;
 
   const tabs: { id: Tab; label: string }[] = [
@@ -115,20 +118,24 @@ export default function MatchDetailClient({
                 </h3>
                 <div className="text-gray-400 text-sm space-y-3">
                   <p>
-                    This section will feature founder-led pre-match analysis covering
-                    pitch conditions, team form, head-to-head records, and key player
-                    matchups. Analysis is published before every major international and
-                    IPL match.
+                    Match previews now have a dedicated intelligence page with tactical
+                    questions, pressure forecasts, linked commentary, and match-linked
+                    blogs. Use it before the first ball to get the full context.
                   </p>
                   <div className="bg-cg-green/5 border border-cg-green/20 rounded-lg p-4">
                     <p className="text-cg-green text-xs font-bold uppercase mb-1">
-                      Venue Report
+                      Preview Centre
                     </p>
                     <p className="text-gray-300 text-sm">
-                      {match.venue} — Historically this venue has favored pace bowlers
-                      in the first session. Average first innings score: 285. Expect
-                      some sideways movement early on with the new ball.
+                      {match.venue} — open the preview page for tactical angles,
+                      matchup questions, and squad-based watchlists.
                     </p>
+                    <Link
+                      href={`/matches/${match.id}/preview`}
+                      className="mt-3 inline-flex rounded-lg bg-cg-green px-3 py-2 text-xs font-bold text-black hover:bg-cg-green-dark"
+                    >
+                      Open Match Preview
+                    </Link>
                   </div>
                 </div>
               </div>
@@ -137,10 +144,15 @@ export default function MatchDetailClient({
                   Post-Match Analysis
                 </h3>
                 <p className="text-gray-400 text-sm">
-                  Post-match analysis will be available once the match concludes.
-                  Expect detailed breakdowns of key moments, turning points, and
-                  player performances.
+                  Post-match analysis now includes scorecard-derived EDA cards,
+                  standout performers, turning points, and tactical takeaways.
                 </p>
+                <Link
+                  href={`/matches/${match.id}/analysis`}
+                  className="mt-4 inline-flex rounded-lg border border-gray-700 bg-white/5 px-3 py-2 text-xs font-bold text-white hover:bg-white/10"
+                >
+                  Open Post-Match Analysis
+                </Link>
               </div>
             </div>
           )}
@@ -165,6 +177,20 @@ export default function MatchDetailClient({
                   {match.venue}
                 </span>
               </div>
+            </div>
+            <div className="mt-4 space-y-2 border-t border-gray-800 pt-4">
+              <Link
+                href={`/matches/${match.id}/preview`}
+                className="block rounded-lg bg-white/5 px-3 py-2 text-center text-xs font-semibold text-white hover:bg-white/10"
+              >
+                Match Preview Page
+              </Link>
+              <Link
+                href={`/matches/${match.id}/analysis`}
+                className="block rounded-lg bg-cg-green/10 px-3 py-2 text-center text-xs font-semibold text-cg-green hover:bg-cg-green/20"
+              >
+                Post-Match Analysis Page
+              </Link>
             </div>
           </div>
           <AdSlot slot="match-sidebar" format="rectangle" />

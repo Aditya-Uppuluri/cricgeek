@@ -12,6 +12,7 @@ export const revalidate = 20;
 
 type PageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ tab?: string }>;
 };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -25,8 +26,14 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function MatchDetailPage({ params }: PageProps) {
+export default async function MatchDetailPage({ params, searchParams }: PageProps) {
   const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  const requestedTab = resolvedSearchParams?.tab;
+  const initialTab =
+    requestedTab === "commentary" || requestedTab === "squads" || requestedTab === "analysis"
+      ? requestedTab
+      : "scorecard";
 
   // SportMonks provides match data directly; supplement with CricAPI for scorecard/commentary
   const [smMatch, scorecard, commentary, squads] = await Promise.all([
@@ -56,6 +63,7 @@ export default async function MatchDetailPage({ params }: PageProps) {
       scorecard={scorecard}
       commentary={commentary}
       squads={squads}
+      initialTab={initialTab}
     />
   );
 }

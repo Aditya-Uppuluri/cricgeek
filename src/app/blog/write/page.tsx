@@ -35,6 +35,7 @@ const OVERS_MESSAGES = [
 export default function WriteBlogPage() {
   const searchParams = useSearchParams();
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
+  const [sessionUserRole, setSessionUserRole] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [content, setContent] = useState("");
   const [tags, setTags] = useState("");
@@ -48,6 +49,7 @@ export default function WriteBlogPage() {
   const [pipelineStatus, setPipelineStatus] = useState<Record<string, string>>({});
   const [generatingTags, setGeneratingTags] = useState(false);
   const [tagError, setTagError] = useState("");
+  const [upgradingWriter, setUpgradingWriter] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [placeholderIdx] = useState(() => Math.floor(Math.random() * PLACEHOLDERS.length));
   const linkedMatchId = searchParams.get("matchId")?.trim() || "";
@@ -127,8 +129,10 @@ export default function WriteBlogPage() {
         const res = await fetch("/api/auth/session");
         const data = await res.json();
         setSessionUserId(data?.user?.id || null);
+        setSessionUserRole(data?.user?.role || null);
       } catch {
         setSessionUserId(null);
+        setSessionUserRole(null);
       }
     }
 
@@ -162,6 +166,27 @@ export default function WriteBlogPage() {
       textarea.focus();
       textarea.setSelectionRange(start + prefix.length, start + prefix.length + selected.length);
     }, 0);
+  };
+
+  const activateWriterProfile = async () => {
+    setUpgradingWriter(true);
+    setError("");
+
+    try {
+      const res = await fetch("/api/writer/profile", { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Could not activate your writer profile.");
+        return;
+      }
+
+      setSessionUserRole(data.user?.role || "writer");
+      window.dispatchEvent(new Event("auth-change"));
+    } catch {
+      setError("Could not activate your writer profile.");
+    } finally {
+      setUpgradingWriter(false);
+    }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -361,6 +386,24 @@ export default function WriteBlogPage() {
               </Link>
             </div>
           )}
+          {sessionUserId && sessionUserRole === "user" && (
+            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 text-sm flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <p className="font-semibold text-blue-200">Writer access is required to publish.</p>
+                <p className="text-blue-100/80">
+                  Normal users can react, save, and follow writers. Activate your writer profile to start publishing.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={activateWriterProfile}
+                disabled={upgradingWriter}
+                className="rounded-lg bg-cg-green px-4 py-2 text-xs font-bold text-black hover:bg-cg-green-dark disabled:opacity-60"
+              >
+                {upgradingWriter ? "Activating..." : "Become a Writer"}
+              </button>
+            </div>
+          )}
           {error && error !== "__auth__" && (
             <div className="bg-red-500/10 border border-red-500/20 rounded-lg p-3 text-red-400 text-sm">
               {error}
@@ -484,11 +527,11 @@ export default function WriteBlogPage() {
           {/* Submit */}
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || (sessionUserId !== null && sessionUserRole === "user")}
             className="w-full bg-cg-green text-black py-3 rounded-xl font-bold text-sm hover:bg-cg-green-dark transition-all disabled:opacity-50 flex items-center justify-center gap-2"
           >
             <Send size={16} />
-            {loading ? "Delivering..." : "Deliver the Ball"}
+            {loading ? "Delivering..." : sessionUserRole === "user" ? "Activate Writer Profile to Publish" : "Deliver the Ball"}
           </button>
           {!isValidLength && currentWordCount > 0 && (
             <p className={`text-center text-xs ${currentWordCount < 50 ? "text-amber-400" : "text-red-400"}`}>

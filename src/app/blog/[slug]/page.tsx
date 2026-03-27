@@ -13,6 +13,9 @@ import {
   ChevronUp,
   BarChart3,
 } from "lucide-react";
+import CricketBallReactionButton from "@/components/blog/CricketBallReactionButton";
+import SaveBlogButton from "@/components/blog/SaveBlogButton";
+import FollowWriterButton from "@/components/writer/FollowWriterButton";
 import ScoreRing from "@/components/writer/ScoreRing";
 import WriterProfileCard from "@/components/writer/WriterProfileCard";
 import BlogDiscussion from "@/components/blog/BlogDiscussion";
@@ -28,11 +31,27 @@ interface BlogData {
   views: number;
   runs: number;
   createdAt: string;
-  author: { id: string; name: string; avatar: string | null };
-  _count: { comments: number };
+  mentionedPlayers?: string[] | null;
+  mentionedTeams?: string[] | null;
+  author: {
+    id: string;
+    name: string;
+    avatar: string | null;
+    role?: string;
+    _count?: { followers: number };
+  };
+  _count: { comments: number; reactions?: number; saves?: number };
+  reactionCount?: number;
+  saveCount?: number;
+  viewerState?: {
+    reacted: boolean;
+    saved: boolean;
+    followsAuthor: boolean;
+  };
   score: {
     bqs: number;
     toneScore: number;
+    negativityScore: number;
     toxicityScore: number;
     originalityScore: number;
     coherenceScore: number;
@@ -47,6 +66,28 @@ interface BlogData {
     statsFound: number;
     statsVerified: number;
     statAccuracy: number;
+    paragraphScores?: {
+      paragraphIndex: number;
+      excerpt: string;
+      overall: number;
+      constructiveness: number;
+      negativity: number;
+      toxicity: number;
+      evidence: number;
+      coherence: number;
+      note: string;
+    }[] | null;
+    explanationJson?: {
+      summary?: string;
+      strengths?: string[];
+      concerns?: string[];
+      negativityVsToxicity?: string;
+      penaltyDecision?: string;
+      userVisibleBreakdown?: string[];
+    } | null;
+    toxicityPenaltyApplied?: boolean;
+    toxicityPenaltyOverride?: boolean;
+    scoreVersion?: string;
     wordCount: number;
     processingTimeMs: number;
   } | null;
@@ -61,49 +102,6 @@ interface BlogData {
     statAccuracy: number;
   };
 }
-
-const DEMO_BLOG: BlogData = {
-  id: "1",
-  title: "Why Jasprit Bumrah is the Best Fast Bowler Right Now",
-  content: `Jasprit Bumrah has firmly established himself as the most lethal fast bowler in world cricket. His unique bowling action, combined with a remarkable ability to deliver pin-point yorkers, makes him virtually unplayable on any surface.\n\nIn Test cricket, Bumrah's average of 20.83 puts him among the all-time greats. His economy rate of 4.63 in ODIs is exceptional for a strike bowler who consistently takes wickets in the powerplay and death overs.\n\nWhat makes Bumrah truly special is his versatility. Whether it's the traditional red ball swinging prodigiously at Melbourne or the white ball reversing at Wankhede, he adapts his approach seamlessly. His ability to bowl critical spells — like his 6/33 against England at Trent Bridge — demonstrates a champion bowler's mentality.\n\nHowever, questions remain about his workload management. While his strike rate is phenomenal, sustaining this across all three formats requires careful rotation. Nevertheless, when Bumrah is fit and firing, there is simply no better fast bowler in world cricket today.`,
-  slug: "bumrah-best-fast-bowler",
-  tags: "analysis,india,test-cricket,bumrah",
-  views: 1250,
-  runs: 47,
-  createdAt: new Date().toISOString(),
-  author: { id: "1", name: "CricAnalyst Pro", avatar: null },
-  _count: { comments: 24 },
-  score: {
-    bqs: 88,
-    toneScore: 82,
-    toxicityScore: 3,
-    originalityScore: 79,
-    coherenceScore: 91,
-    archetypeLabel: "analyst",
-    archetypeConfidence: 0.82,
-    constructiveness: 85,
-    evidencePresence: 90,
-    positionClarity: 78,
-    infoDensity: 84,
-    argumentLogic: 70,
-    entitiesFound: 3,
-    statsFound: 4,
-    statsVerified: 3,
-    statAccuracy: 75,
-    wordCount: 168,
-    processingTimeMs: 1240,
-  },
-  authorProfile: {
-    averageBQS: 87.5,
-    totalBlogs: 34,
-    archetype: "analyst",
-    level: 8,
-    xp: 780,
-    bcs: 82,
-    writerTitle: "THE ANALYST",
-    statAccuracy: 81,
-  },
-};
 
 function getBQSColor(bqs: number): string {
   if (bqs >= 80) return "text-green-400";
@@ -136,10 +134,10 @@ export default function BlogSlugPage({
   const resolvedParams = use(params);
   const [blog, setBlog] = useState<BlogData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
   const [showScoreBreakdown, setShowScoreBreakdown] = useState(false);
   const [runs, setRuns] = useState(0);
   const [commentCount, setCommentCount] = useState(0);
-  const [runsGiven, setRunsGiven] = useState(false);
   const [milestone, setMilestone] = useState<string | null>(null);
   const viewCounted = useRef(false);
   const startTime = useRef(Date.now());
@@ -178,17 +176,16 @@ export default function BlogSlugPage({
         if (res.ok) {
           const data = await res.json();
           setBlog(data);
-          setRuns(data.runs ?? 0);
+          setRuns(data.reactionCount ?? data.runs ?? 0);
           setCommentCount(data._count?.comments ?? 0);
         } else {
-          setBlog(DEMO_BLOG);
-          setRuns(DEMO_BLOG.runs);
-          setCommentCount(DEMO_BLOG._count.comments);
+          const data = await res.json().catch(() => null);
+          setError(data?.error || "This blog could not be loaded.");
+          setBlog(null);
         }
       } catch {
-        setBlog(DEMO_BLOG);
-        setRuns(DEMO_BLOG.runs);
-        setCommentCount(DEMO_BLOG._count.comments);
+        setError("This blog could not be loaded.");
+        setBlog(null);
       } finally {
         setLoading(false);
       }
@@ -218,18 +215,6 @@ export default function BlogSlugPage({
     return () => clearTimeout(timer);
   }, [blog, resolvedParams.slug, countView]);
 
-  const handleGiveRun = async () => {
-    if (runsGiven || !blog) return;
-    setRunsGiven(true);
-    setRuns((r) => r + 1);
-    try {
-      await fetch(`/api/blogs/${blog.slug}/runs`, { method: "POST" });
-    } catch {
-      setRuns((r) => r - 1);
-      setRunsGiven(false);
-    }
-  };
-
   if (loading) {
     return (
       <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8 animate-pulse">
@@ -244,7 +229,21 @@ export default function BlogSlugPage({
     );
   }
 
-  if (!blog) return null;
+  if (!blog) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 sm:px-6 py-20 text-center">
+        <h1 className="text-2xl font-black text-white">Blog unavailable</h1>
+        <p className="mt-2 text-sm text-gray-400">{error || "We could not load this blog right now."}</p>
+        <Link
+          href="/blog"
+          className="mt-6 inline-flex items-center gap-2 rounded-lg bg-cg-green px-4 py-2 text-sm font-bold text-black hover:bg-cg-green-dark"
+        >
+          <ArrowLeft size={14} />
+          Back to Community
+        </Link>
+      </div>
+    );
+  }
 
   const archMeta = blog.score
     ? (ARCHETYPE_META[blog.score.archetypeLabel] ?? ARCHETYPE_META.analyst)
@@ -260,14 +259,13 @@ export default function BlogSlugPage({
         { label: "Coherence",       value: blog.score.coherenceScore,     icon: "🔗" },
         { label: "Constructive",    value: blog.score.constructiveness,   icon: "🏗️" },
         { label: "Evidence",        value: blog.score.evidencePresence,   icon: "📊" },
+        { label: "Negativity",      value: 100 - blog.score.negativityScore, icon: "🌧️" },
         { label: "Argument Logic",  value: blog.score.argumentLogic ?? 0, icon: "⚖️" },
         { label: "Info Density",    value: blog.score.infoDensity,        icon: "📈" },
         { label: "Stat Accuracy",   value: blog.score.statAccuracy,       icon: "✅" },
         { label: "Toxicity Free",   value: 100 - blog.score.toxicityScore,icon: "🧤" },
       ]
     : [];
-
-  const runBats = Math.min(5, Math.round((runs / Math.max(blog.views, 1)) * 50));
 
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
@@ -395,6 +393,12 @@ export default function BlogSlugPage({
                 >
                   View Profile →
                 </Link>
+                <FollowWriterButton
+                  writerId={blog.author.id}
+                  initialFollowing={Boolean(blog.viewerState?.followsAuthor)}
+                  initialFollowerCount={blog.author._count?.followers ?? 0}
+                  compact
+                />
               </div>
             </div>
           )}
@@ -447,12 +451,57 @@ export default function BlogSlugPage({
                   <div className="col-span-2 mt-2 pt-2 border-t border-gray-800 flex items-center gap-4 text-[10px] text-gray-500">
                     <span>⚡ Processed in {blog.score.processingTimeMs}ms</span>
                     <span>📝 {blog.score.wordCount} words</span>
+                    {blog.score.scoreVersion && <span>🧠 {blog.score.scoreVersion}</span>}
                     <span>
                       ✅ {blog.score.statsVerified}/{blog.score.statsFound} stats verified
                     </span>
+                    {blog.score.toxicityPenaltyOverride && <span>🛡️ Toxicity override reduced</span>}
                   </div>
                 </div>
               )}
+            </div>
+          )}
+
+          {blog.score?.explanationJson && (
+            <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 space-y-4">
+              <div>
+                <h3 className="text-sm font-bold text-white">Why This BQS Was Given</h3>
+                <p className="mt-2 text-sm leading-7 text-gray-300">
+                  {blog.score.explanationJson.summary}
+                </p>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="rounded-lg border border-cg-green/20 bg-cg-green/5 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-cg-green">Strengths</p>
+                  <ul className="mt-3 space-y-2 text-sm text-gray-300">
+                    {(blog.score.explanationJson.strengths ?? []).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+                <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-amber-300">Watchouts</p>
+                  <ul className="mt-3 space-y-2 text-sm text-gray-300">
+                    {(blog.score.explanationJson.concerns ?? []).map((item) => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Negativity vs Toxicity</p>
+                  <p className="mt-2 text-sm leading-7 text-gray-300">
+                    {blog.score.explanationJson.negativityVsToxicity}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Penalty Decision</p>
+                  <p className="mt-2 text-sm leading-7 text-gray-300">
+                    {blog.score.explanationJson.penaltyDecision}
+                  </p>
+                </div>
+              </div>
             </div>
           )}
 
@@ -479,22 +528,95 @@ export default function BlogSlugPage({
               ))}
             </div>
 
+            {blog.score?.paragraphScores && blog.score.paragraphScores.length > 0 && (
+              <div className="mt-8 border-t border-gray-800 pt-6">
+                <h3 className="text-sm font-bold text-white">Paragraph-Level Scoring</h3>
+                <div className="mt-4 space-y-3">
+                  {blog.score.paragraphScores.map((paragraph) => (
+                    <div key={paragraph.paragraphIndex} className="rounded-xl border border-gray-800 bg-cg-dark p-4">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-gray-300">
+                          Paragraph {paragraph.paragraphIndex + 1}
+                        </span>
+                        <span className="text-sm font-bold text-white">Overall {Math.round(paragraph.overall)}</span>
+                        <span className="text-xs text-gray-500">Constructive {Math.round(paragraph.constructiveness)}</span>
+                        <span className="text-xs text-gray-500">Negativity {Math.round(paragraph.negativity)}</span>
+                        <span className="text-xs text-gray-500">Toxicity {Math.round(paragraph.toxicity)}</span>
+                      </div>
+                      <p className="mt-3 text-sm text-gray-300">{paragraph.excerpt}</p>
+                      <p className="mt-2 text-xs text-gray-500">{paragraph.note}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Tags */}
-            {blog.tags && (
-              <div className="flex flex-wrap gap-1.5 mt-8 pt-6 border-t border-gray-800">
-                {blog.tags.split(",").map((tag) => (
-                  <span
-                    key={tag}
-                    className="bg-gray-800 text-gray-400 text-[11px] px-3 py-1 rounded-full hover:bg-cg-green/20 hover:text-cg-green transition-all cursor-pointer"
-                  >
-                    #{tag.trim()}
-                  </span>
-                ))}
+            {(blog.tags || blog.mentionedPlayers?.length || blog.mentionedTeams?.length) && (
+              <div className="mt-8 border-t border-gray-800 pt-6">
+                {blog.tags && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {blog.tags.split(",").map((tag) => (
+                      <span
+                        key={tag}
+                        className="bg-gray-800 text-gray-400 text-[11px] px-3 py-1 rounded-full hover:bg-cg-green/20 hover:text-cg-green transition-all cursor-pointer"
+                      >
+                        #{tag.trim()}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(blog.mentionedPlayers?.length || blog.mentionedTeams?.length) && (
+                  <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    {blog.mentionedPlayers?.length ? (
+                      <div className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Mentioned Players</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {blog.mentionedPlayers.map((player) => (
+                            <span key={player} className="rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-white">
+                              {player}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {blog.mentionedTeams?.length ? (
+                      <div className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-3">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Mentioned Teams</p>
+                        <div className="mt-2 flex flex-wrap gap-1.5">
+                          {blog.mentionedTeams.map((team) => (
+                            <span key={team} className="rounded-full bg-white/5 px-2.5 py-1 text-[11px] text-white">
+                              {team}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
               </div>
             )}
 
             {/* Action bar */}
-            <div className="flex items-center gap-3 mt-6 pt-5 border-t border-gray-800">
+            <div className="mt-6 flex flex-wrap items-center gap-3 border-t border-gray-800 pt-5">
+              <CricketBallReactionButton
+                slug={blog.slug}
+                initialCount={runs}
+                initialReacted={Boolean(blog.viewerState?.reacted)}
+                loginHref={`/auth/login?redirect=/blog/${blog.slug}`}
+                onUpdate={(next) => setRuns(next.count)}
+              />
+              <SaveBlogButton
+                slug={blog.slug}
+                initialSaved={Boolean(blog.viewerState?.saved)}
+                initialCount={blog.saveCount ?? 0}
+                loginHref={`/auth/login?redirect=/blog/${blog.slug}`}
+              />
+              <FollowWriterButton
+                writerId={blog.author.id}
+                initialFollowing={Boolean(blog.viewerState?.followsAuthor)}
+                initialFollowerCount={blog.author._count?.followers ?? 0}
+              />
               <button
                 className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-all"
                 title="Share"
@@ -532,29 +654,21 @@ export default function BlogSlugPage({
               </p>
             )}
 
-            {/* Runs (5 bat emojis) */}
-            <p className="text-xs text-gray-400 mb-3">Give your runs:</p>
-            <div className="flex items-center justify-center gap-2 mb-5">
-              {[1, 2, 3, 4, 5].map((n) => (
-                <button
-                  key={n}
-                  onClick={handleGiveRun}
-                  disabled={runsGiven}
-                  title={runsGiven ? "Already given" : "Give a run!"}
-                  className={`text-2xl transition-all hover:scale-125 active:scale-95 ${
-                    runsGiven && n <= runBats + 1 ? "opacity-100" : "opacity-40"
-                  } ${runsGiven ? "cursor-default" : "cursor-pointer hover:opacity-100"}`}
-                >
-                  🏏
-                </button>
-              ))}
+            <div className="mb-5 flex items-center justify-center">
+              <CricketBallReactionButton
+                slug={blog.slug}
+                initialCount={runs}
+                initialReacted={Boolean(blog.viewerState?.reacted)}
+                loginHref={`/auth/login?redirect=/blog/${blog.slug}`}
+                onUpdate={(next) => setRuns(next.count)}
+              />
             </div>
 
             {/* Blog stats */}
             <div className="grid grid-cols-4 gap-3 mb-6 max-w-sm mx-auto">
-              {[
-                { label: "Runs", value: `🏏 ${runs.toLocaleString()}` },
-                { label: "Views", value: `👁️ ${blog.views.toLocaleString()}` },
+                {[
+                  { label: "Runs", value: `🏏 ${runs.toLocaleString()}` },
+                  { label: "Views", value: `👁️ ${blog.views.toLocaleString()}` },
                 { label: "Comments", value: `💬 ${commentCount}` },
                 
                 {
@@ -631,6 +745,13 @@ export default function BlogSlugPage({
               totalBlogs={blog.authorProfile?.totalBlogs ?? 0}
               compact
             />
+            <div className="mt-3">
+              <FollowWriterButton
+                writerId={blog.author.id}
+                initialFollowing={Boolean(blog.viewerState?.followsAuthor)}
+                initialFollowerCount={blog.author._count?.followers ?? 0}
+              />
+            </div>
           </div>
         </div>
       </div>
