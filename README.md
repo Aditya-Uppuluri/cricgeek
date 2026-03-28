@@ -33,6 +33,7 @@ Production setup steps are documented here:
 Important:
 - apply Prisma schema changes before deploy
 - `OLLAMA_URL` must be reachable from production
+- if you run the Python AI service too, set `OLLAMA_BASE_URL` to the same remote host
 - use `/api/health` after deploy to verify the environment
 
 Health endpoint:

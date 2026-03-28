@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
 import {
   Shield, FileText, Trophy, Star, Check, X, AlertTriangle, Plus,
@@ -19,7 +20,33 @@ interface AdminBlog {
   _count: { comments: number; reports: number };
 }
 
-// Demo scoring data
+interface ContestSubmissionAdmin {
+  id: string;
+  aiScoreSnapshot: number;
+  finalScore: number;
+  adminOverrideScore?: number | null;
+  ranking?: number | null;
+  winnerPosition?: number | null;
+  awardedPrize?: string | null;
+  author: { id: string; name: string };
+  blog: { id: string; title: string; slug: string; status: string };
+}
+
+interface ContestAdmin {
+  id: string;
+  title: string;
+  description: string;
+  prize?: string | null;
+  shortBlogMaxWords: number;
+  status: string;
+  startDate: string;
+  endDate: string;
+  announcementTitle?: string | null;
+  announcementBody?: string | null;
+  announcementPublishedAt?: string | null;
+  submissions: ContestSubmissionAdmin[];
+}
+
 const DEMO_SCORED_BLOGS = [
   { id: "1", title: "Why Bumrah's Yorker is Literally Unplayable", author: "CricAnalyst Pro", bqs: 88, toxicity: 3, archetype: "analyst", status: "completed" },
   { id: "2", title: "IPL 2026 Auction Analysis", author: "TheCricStoryteller", bqs: 76, toxicity: 5, archetype: "storyteller", status: "completed" },
@@ -29,12 +56,9 @@ const DEMO_SCORED_BLOGS = [
 ];
 
 const PIPELINE_MODELS = [
-  { name: "RoBERTa Sentiment", host: "HuggingFace Spaces", status: "online", latency: "320ms" },
-  { name: "Toxic-BERT", host: "Oracle Cloud VM 2", status: "online", latency: "180ms" },
-  { name: "MiniLM Embeddings", host: "Oracle Cloud VM 2", status: "online", latency: "150ms" },
-  { name: "BART-MNLI", host: "HuggingFace Spaces", status: "online", latency: "450ms" },
-  { name: "BERT-NER", host: "Oracle Cloud VM 2", status: "online", latency: "200ms" },
-  { name: "Rule Engine", host: "Oracle Cloud VM 1", status: "online", latency: "12ms" },
+  { name: "Qwen 3.5 Unified Judge", host: "Ollama", status: "online", latency: "1.2s" },
+  { name: "Contest Ranking Engine", host: "App Server", status: "online", latency: "45ms" },
+  { name: "Calibration Runner", host: "App Server", status: "online", latency: "3.8s" },
 ];
 
 export default function AdminPage() {
@@ -43,6 +67,19 @@ export default function AdminPage() {
   const [statusFilter, setStatusFilter] = useState("pending");
   const [loading, setLoading] = useState(true);
   const [authState, setAuthState] = useState<"loading" | "admin" | "user" | "guest">("loading");
+  const [contests, setContests] = useState<ContestAdmin[]>([]);
+  const [contestLoading, setContestLoading] = useState(false);
+  const [contestForm, setContestForm] = useState({
+    title: "",
+    description: "",
+    prize: "",
+    shortBlogMaxWords: 250,
+    startDate: "",
+    endDate: "",
+  });
+  const [contestMessage, setContestMessage] = useState("");
+  const [overrideDrafts, setOverrideDrafts] = useState<Record<string, string>>({});
+  const [announcementDrafts, setAnnouncementDrafts] = useState<Record<string, { title: string; body: string }>>({});
 
   useEffect(() => {
     async function loadSession() {
@@ -86,6 +123,25 @@ export default function AdminPage() {
     void fetchBlogs();
   }, [statusFilter, authState, fetchBlogs]);
 
+  const fetchContests = useCallback(async () => {
+    setContestLoading(true);
+    try {
+      const res = await fetch("/api/admin/contests");
+      const data = await res.json();
+      setContests(data.contests || []);
+    } catch {
+      setContests([]);
+    } finally {
+      setContestLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (authState === "admin" && activeTab === "contests") {
+      void fetchContests();
+    }
+  }, [activeTab, authState, fetchContests]);
+
   const updateBlogStatus = async (blogId: string, status: string) => {
     try {
       await fetch("/api/admin/blogs", {
@@ -97,6 +153,79 @@ export default function AdminPage() {
     } catch {
       console.error("Failed to update blog");
     }
+  };
+
+  const createContest = async () => {
+    setContestMessage("");
+    try {
+      const res = await fetch("/api/admin/contests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...contestForm,
+          shortBlogMaxWords: Number(contestForm.shortBlogMaxWords),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setContestMessage(data.error || "Could not create contest.");
+        return;
+      }
+      setContestForm({
+        title: "",
+        description: "",
+        prize: "",
+        shortBlogMaxWords: 250,
+        startDate: "",
+        endDate: "",
+      });
+      setContestMessage("Contest created.");
+      await fetchContests();
+    } catch {
+      setContestMessage("Could not create contest.");
+    }
+  };
+
+  const refreshStandings = async (contestId: string) => {
+    await fetch("/api/admin/contests", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "refresh-standings", contestId }),
+    });
+    await fetchContests();
+  };
+
+  const saveOverride = async (submissionId: string, contestId: string) => {
+    const value = Number(overrideDrafts[submissionId]);
+    if (Number.isNaN(value)) return;
+
+    await fetch("/api/admin/contests", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "override-score",
+        submissionId,
+        adminOverrideScore: value,
+      }),
+    });
+    await fetchContests();
+  };
+
+  const publishAnnouncement = async (contestId: string) => {
+    const draft = announcementDrafts[contestId];
+    if (!draft?.title || !draft?.body) return;
+
+    await fetch("/api/admin/contests", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "publish-announcement",
+        contestId,
+        announcementTitle: draft.title,
+        announcementBody: draft.body,
+      }),
+    });
+    await fetchContests();
   };
 
   const tabs = [
@@ -268,6 +397,7 @@ export default function AdminPage() {
               </div>
               <p className="text-2xl font-black text-cg-green">Online</p>
               <p className="text-[10px] text-gray-500 mt-1">All 6 models running</p>
+              <p className="text-[10px] text-gray-500 mt-1">Qwen 3.5 drives unified scoring + moderation</p>
             </div>
             <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-4">
               <div className="flex items-center gap-2 mb-2">
@@ -360,16 +490,207 @@ export default function AdminPage() {
 
       {/* Contests */}
       {activeTab === "contests" && (
-        <div>
-          <button className="bg-cg-green text-black px-4 py-2 rounded-lg font-bold text-sm hover:bg-cg-green-dark transition-all flex items-center gap-2 mb-6">
-            <Plus size={16} />
-            Create Contest
-          </button>
-          <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-8 text-center">
-            <Trophy size={48} className="text-gray-700 mx-auto mb-4" />
-            <p className="text-gray-400">
-              Contest management interface. Create prediction contests, fantasy leagues, and community challenges.
-            </p>
+        <div className="space-y-6">
+          <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Plus size={16} className="text-cg-green" />
+              <h3 className="text-sm font-bold text-white">Create Short Blog Contest</h3>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <input
+                value={contestForm.title}
+                onChange={(event) => setContestForm((prev) => ({ ...prev, title: event.target.value }))}
+                placeholder="Contest title"
+                className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-sm text-white"
+              />
+              <input
+                value={contestForm.prize}
+                onChange={(event) => setContestForm((prev) => ({ ...prev, prize: event.target.value }))}
+                placeholder="Prize"
+                className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-sm text-white"
+              />
+              <input
+                type="datetime-local"
+                value={contestForm.startDate}
+                onChange={(event) => setContestForm((prev) => ({ ...prev, startDate: event.target.value }))}
+                className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-sm text-white"
+              />
+              <input
+                type="datetime-local"
+                value={contestForm.endDate}
+                onChange={(event) => setContestForm((prev) => ({ ...prev, endDate: event.target.value }))}
+                className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-sm text-white"
+              />
+              <input
+                type="number"
+                value={contestForm.shortBlogMaxWords}
+                onChange={(event) => setContestForm((prev) => ({ ...prev, shortBlogMaxWords: Number(event.target.value) }))}
+                placeholder="Word cap"
+                className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-sm text-white"
+              />
+            </div>
+            <textarea
+              value={contestForm.description}
+              onChange={(event) => setContestForm((prev) => ({ ...prev, description: event.target.value }))}
+              placeholder="Contest description"
+              className="mt-3 min-h-28 w-full rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-sm text-white"
+            />
+            <div className="mt-3 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={createContest}
+                className="rounded-lg bg-cg-green px-4 py-2 text-sm font-bold text-black hover:bg-cg-green-dark"
+              >
+                Create Contest
+              </button>
+              {contestMessage && <p className="text-xs text-gray-400">{contestMessage}</p>}
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {contestLoading ? (
+              <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-8 text-center text-gray-400">
+                Loading contests...
+              </div>
+            ) : contests.length === 0 ? (
+              <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-8 text-center">
+                <Trophy size={48} className="text-gray-700 mx-auto mb-4" />
+                <p className="text-gray-400">No contests yet. Create one to open short-blog submissions.</p>
+              </div>
+            ) : (
+              contests.map((contest) => (
+                <div key={contest.id} className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-bold text-white">{contest.title}</h3>
+                      <p className="mt-1 text-sm text-gray-400">{contest.description}</p>
+                      <div className="mt-2 flex flex-wrap gap-3 text-xs text-gray-500">
+                        <span className="capitalize rounded-full bg-white/5 px-2 py-1 text-white">{contest.status}</span>
+                        <span>Prize: {contest.prize || "TBD"}</span>
+                        <span>Word cap: {contest.shortBlogMaxWords}</span>
+                        <span>{new Date(contest.startDate).toLocaleString()} → {new Date(contest.endDate).toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => refreshStandings(contest.id)}
+                      className="rounded-lg border border-gray-700 bg-white/5 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
+                    >
+                      Refresh Top 3
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    {[1, 2, 3].map((position) => {
+                      const winner = contest.submissions.find((submission) => submission.winnerPosition === position);
+                      return (
+                        <div key={position} className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                          <p className="text-[10px] font-semibold uppercase tracking-wide text-gray-500">Winner #{position}</p>
+                          {winner ? (
+                            <div className="mt-2 space-y-1">
+                              <p className="text-sm font-semibold text-white">{winner.blog.title}</p>
+                              <p className="text-xs text-gray-400">{winner.author.name}</p>
+                              <p className="text-xs text-cg-green">Final score {winner.finalScore.toFixed(1)}</p>
+                            </div>
+                          ) : (
+                            <p className="mt-2 text-xs text-gray-500">No winner selected yet.</p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="min-w-full text-sm">
+                      <thead>
+                        <tr className="text-left text-xs uppercase tracking-wide text-gray-500">
+                          <th className="py-2 pr-4">Rank</th>
+                          <th className="py-2 pr-4">Blog</th>
+                          <th className="py-2 pr-4">Writer</th>
+                          <th className="py-2 pr-4">AI</th>
+                          <th className="py-2 pr-4">Final</th>
+                          <th className="py-2 pr-4">Override</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {contest.submissions.map((submission) => (
+                          <tr key={submission.id} className="border-t border-gray-800">
+                            <td className="py-3 pr-4 text-white">{submission.ranking ?? "-"}</td>
+                            <td className="py-3 pr-4">
+                              <Link href={`/blog/${submission.blog.slug}`} className="text-white hover:text-cg-green">
+                                {submission.blog.title}
+                              </Link>
+                            </td>
+                            <td className="py-3 pr-4 text-gray-400">{submission.author.name}</td>
+                            <td className="py-3 pr-4 text-gray-300">{submission.aiScoreSnapshot.toFixed(1)}</td>
+                            <td className="py-3 pr-4 text-cg-green">{submission.finalScore.toFixed(1)}</td>
+                            <td className="py-3 pr-4">
+                              <div className="flex items-center gap-2">
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={100}
+                                  step={0.1}
+                                  value={overrideDrafts[submission.id] ?? submission.adminOverrideScore ?? ""}
+                                  onChange={(event) => setOverrideDrafts((prev) => ({ ...prev, [submission.id]: event.target.value }))}
+                                  className="w-24 rounded-lg border border-gray-800 bg-cg-dark px-2 py-1 text-xs text-white"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => saveOverride(submission.id, contest.id)}
+                                  className="rounded-lg bg-white/5 px-2 py-1 text-xs font-semibold text-white hover:bg-white/10"
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Prize Announcement</p>
+                    <input
+                      value={announcementDrafts[contest.id]?.title ?? contest.announcementTitle ?? ""}
+                      onChange={(event) =>
+                        setAnnouncementDrafts((prev) => ({
+                          ...prev,
+                          [contest.id]: {
+                            title: event.target.value,
+                            body: prev[contest.id]?.body ?? contest.announcementBody ?? "",
+                          },
+                        }))
+                      }
+                      placeholder="Announcement title"
+                      className="mt-3 w-full rounded-lg border border-gray-800 bg-cg-dark-2 px-3 py-2 text-sm text-white"
+                    />
+                    <textarea
+                      value={announcementDrafts[contest.id]?.body ?? contest.announcementBody ?? ""}
+                      onChange={(event) =>
+                        setAnnouncementDrafts((prev) => ({
+                          ...prev,
+                          [contest.id]: {
+                            title: prev[contest.id]?.title ?? contest.announcementTitle ?? "",
+                            body: event.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="Winner announcement copy"
+                      className="mt-3 min-h-24 w-full rounded-lg border border-gray-800 bg-cg-dark-2 px-3 py-2 text-sm text-white"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => publishAnnouncement(contest.id)}
+                      className="mt-3 rounded-lg bg-cg-green px-3 py-2 text-xs font-bold text-black hover:bg-cg-green-dark"
+                    >
+                      Publish Announcement
+                    </button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

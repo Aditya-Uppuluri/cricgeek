@@ -38,6 +38,19 @@ export async function GET(
           select: { comments: true, reactions: true, saves: true },
         },
         score: true,
+        contestSubmissions: {
+          include: {
+            contest: {
+              select: {
+                id: true,
+                title: true,
+                prize: true,
+                announcementTitle: true,
+              },
+            },
+          },
+          take: 1,
+        },
         reactions: viewerId
           ? {
               where: { userId: viewerId },

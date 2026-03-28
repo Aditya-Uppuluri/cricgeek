@@ -11,7 +11,18 @@
  * - Heuristic scoring when Ollama is unavailable
  */
 
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+import { getMatchScorecard } from "@/lib/cricket-api";
+import {
+  runWebFactCheck,
+  type FactCheckSource,
+  type FactCheckVerdictEntry,
+  type SearchBackend,
+  type WebFactCheckReport,
+} from "@/lib/fact-check";
+import { getOllamaHeaders, getOllamaUrl, OLLAMA_REQUEST_TIMEOUT_MS } from "@/lib/ollama";
+import type { BattingEntry, BowlingEntry, Scorecard } from "@/types/cricket";
+
+const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_BQS_MODEL = process.env.OLLAMA_BQS_MODEL || process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
 // ── Types ────────────────────────────────────────────────────────────
@@ -78,16 +89,42 @@ export interface RuleEngineResult {
   toxicityPenaltyOverride: boolean;
 }
 
+export interface PersistedFactCheckReport {
+  overallScore: number;
+  summary: string;
+  searchBackend: SearchBackend;
+  providerAvailable: boolean;
+  searchError?: string | null;
+  directStats: {
+    source: "live" | "fallback";
+    claimsFound: number;
+    claimsVerified: number;
+    accuracy: number;
+    claims: { player: string; stat: string; value: string }[];
+  };
+  webClaims: {
+    claimsResearched: number;
+    supported: number;
+    contradicted: number;
+    inconclusive: number;
+    score: number;
+    summary: string;
+    verdicts: FactCheckVerdictEntry[];
+  };
+}
+
 export interface BlogScoreResult {
   bqs: number;
   preProcess: PreProcessResult;
   modelScores: ModelScores;
   nerResult: NERResult;
   ruleEngine: RuleEngineResult;
+  writerDNASignal: WriterDNA;
   paragraphScores: ParagraphScore[];
   explanation: ExplanationJson;
   statsVerified: number;
   statAccuracy: number;
+  factCheck: PersistedFactCheckReport;
   processingTimeMs: number;
   scoreVersion: string;
 }
@@ -182,6 +219,7 @@ export function preProcess(text: string): PreProcessResult {
 interface OllamaScoreResponse {
   archetype: Archetype;
   archetype_confidence: number;
+  final_bqs?: number;
   tone_score: number;
   negativity_score: number;
   toxicity_score: number;
@@ -202,6 +240,9 @@ interface OllamaScoreResponse {
   word_count: number;
   lexical_diversity: number;
   sentence_variety: number;
+  toxicity_penalty_applied?: boolean;
+  toxicity_penalty_override?: boolean;
+  writer_dna?: Partial<Record<Archetype, number>>;
   paragraph_scores?: Array<{
     paragraph_index?: number;
     excerpt?: string;
@@ -223,6 +264,21 @@ interface OllamaScoreResponse {
   };
 }
 
+interface OllamaGeneratePayload {
+  response?: string;
+  thinking?: string;
+}
+
+type ExtractedStatClaim = {
+  player: string;
+  metric: "runs" | "wickets" | "strike_rate" | "economy" | "overs" | "fours" | "sixes";
+  value: number;
+};
+
+type ExtractedClaimsPayload = {
+  claims?: ExtractedStatClaim[];
+};
+
 function clampScore(value: unknown, fallback = 0): number {
   if (typeof value !== "number" || Number.isNaN(value)) return fallback;
   return Math.max(0, Math.min(100, Math.round(value * 10) / 10));
@@ -241,6 +297,176 @@ function safeStringList(value: unknown, limit = 4): string[] {
 
 function excerptForParagraph(paragraph: string): string {
   return paragraph.replace(/\s+/g, " ").trim().slice(0, 120);
+}
+
+function extractJsonObjects(candidate: string): string[] {
+  const objects: string[] = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  let escaped = false;
+
+  for (let index = 0; index < candidate.length; index += 1) {
+    const char = candidate[index];
+
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+
+    if (char === "\"") {
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) continue;
+
+    if (char === "{") {
+      if (depth === 0) start = index;
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}" && depth > 0) {
+      depth -= 1;
+
+      if (depth === 0 && start >= 0) {
+        objects.push(candidate.slice(start, index + 1));
+        start = -1;
+      }
+    }
+  }
+
+  return objects;
+}
+
+function normaliseJsonCandidate(candidate: string): string {
+  let output = "";
+  let inString = false;
+  let escaped = false;
+
+  for (const char of candidate) {
+    if (escaped) {
+      output += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === "\\") {
+      output += char;
+      escaped = true;
+      continue;
+    }
+
+    if (char === "\"") {
+      output += char;
+      inString = !inString;
+      continue;
+    }
+
+    if (inString) {
+      if (char === "\n") {
+        output += "\\n";
+        continue;
+      }
+
+      if (char === "\r") {
+        output += "\\r";
+        continue;
+      }
+
+      if (char === "\t") {
+        output += "\\t";
+        continue;
+      }
+    }
+
+    output += char;
+  }
+
+  return output.replace(/,\s*([}\]])/g, "$1").trim();
+}
+
+function parseJsonPayload<T>(
+  payload: OllamaGeneratePayload,
+  validator: (value: unknown) => value is T
+): T | null {
+  const candidates = [payload.response, payload.thinking]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+
+  for (const candidate of candidates) {
+    const possibleJsonObjects = [candidate, ...extractJsonObjects(candidate)];
+
+    for (const possibleJson of possibleJsonObjects) {
+      try {
+        const parsed = JSON.parse(normaliseJsonCandidate(possibleJson)) as unknown;
+        if (validator(parsed)) {
+          return parsed;
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+
+  return null;
+}
+
+function parseStructuredOllamaPayload(payload: OllamaGeneratePayload): OllamaScoreResponse | null {
+  return parseJsonPayload<OllamaScoreResponse>(
+    payload,
+    (value): value is OllamaScoreResponse =>
+      typeof value === "object" && value !== null && "archetype" in value
+  );
+}
+
+function parseClaimExtractionPayload(payload: OllamaGeneratePayload): ExtractedClaimsPayload | null {
+  return parseJsonPayload<ExtractedClaimsPayload>(
+    payload,
+    (value): value is ExtractedClaimsPayload =>
+      typeof value === "object" && value !== null && "claims" in value
+  );
+}
+
+function normaliseWriterDNASignal(
+  value: OllamaScoreResponse["writer_dna"],
+  fallbackArchetype: Archetype
+): WriterDNA {
+  const keys: Archetype[] = ["analyst", "fan", "storyteller", "debater"];
+  const values = keys.map((key) => {
+    const candidate = value?.[key];
+    return typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0 ? candidate : null;
+  });
+
+  const hasModelSignal = values.some((entry) => entry !== null);
+
+  if (!hasModelSignal) {
+    return {
+      analyst: fallbackArchetype === "analyst" ? 100 : 0,
+      fan: fallbackArchetype === "fan" ? 100 : 0,
+      storyteller: fallbackArchetype === "storyteller" ? 100 : 0,
+      debater: fallbackArchetype === "debater" ? 100 : 0,
+    };
+  }
+
+  const total = values.reduce<number>((sum, entry) => sum + (entry ?? 0), 0) || 1;
+  const normalised = keys.map((key, index) => ({
+    key,
+    value: Math.round((((values[index] ?? 0) / total) * 100) * 10) / 10,
+  }));
+
+  return {
+    analyst: normalised.find((entry) => entry.key === "analyst")?.value ?? 0,
+    fan: normalised.find((entry) => entry.key === "fan")?.value ?? 0,
+    storyteller: normalised.find((entry) => entry.key === "storyteller")?.value ?? 0,
+    debater: normalised.find((entry) => entry.key === "debater")?.value ?? 0,
+  };
 }
 
 async function callOllamaScorer(input: { title?: string; content: string }): Promise<OllamaScoreResponse | null> {
@@ -265,6 +491,7 @@ Return JSON with exactly these keys:
 {
   "archetype": "analyst|fan|storyteller|debater",
   "archetype_confidence": 0.0,
+  "final_bqs": 0,
   "tone_score": 0,
   "negativity_score": 0,
   "toxicity_score": 0,
@@ -285,6 +512,14 @@ Return JSON with exactly these keys:
   "word_count": 0,
   "lexical_diversity": 0,
   "sentence_variety": 0,
+  "toxicity_penalty_applied": false,
+  "toxicity_penalty_override": false,
+  "writer_dna": {
+    "analyst": 0,
+    "fan": 0,
+    "storyteller": 0,
+    "debater": 0
+  },
   "paragraph_scores": [
     {
       "paragraph_index": 0,
@@ -308,6 +543,13 @@ Return JSON with exactly these keys:
   }
 }
 
+Keep the JSON compact:
+- excerpt must be at most 120 characters.
+- paragraph note must be one short sentence.
+- explanation summary must be one short sentence.
+- strengths and concerns must be short phrases, max 6 words each.
+- user_visible_breakdown must contain exactly 3 short items.
+
 Title: ${input.title || "Untitled"}
 Paragraphs:
 ${paragraphs.map((paragraph, index) => `[${index}] ${paragraph}`).join("\n\n")}`;
@@ -315,19 +557,20 @@ ${paragraphs.map((paragraph, index) => `[${index}] ${paragraph}`).join("\n\n")}`
   try {
     const res = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getOllamaHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         model: OLLAMA_BQS_MODEL,
         prompt,
         format: "json",
+        think: false,
         stream: false,
         options: {
           temperature: 0.15,
           top_p: 0.85,
-          num_predict: 800,
+          num_predict: 1400,
         },
       }),
-      signal: AbortSignal.timeout(30_000), // 30s timeout
+      signal: AbortSignal.timeout(OLLAMA_REQUEST_TIMEOUT_MS),
     });
 
     if (!res.ok) {
@@ -336,12 +579,84 @@ ${paragraphs.map((paragraph, index) => `[${index}] ${paragraph}`).join("\n\n")}`
       return null;
     }
 
-    const data = (await res.json()) as { response?: string };
-    if (!data.response) return null;
-    return JSON.parse(data.response) as OllamaScoreResponse;
-  } catch {
-    console.warn("[scoring] Ollama scorer unavailable — using heuristic fallback");
+    const data = (await res.json()) as OllamaGeneratePayload;
+    const parsed = parseStructuredOllamaPayload(data);
+
+    if (!parsed) {
+      console.warn("[scoring] Ollama scorer returned an unparseable payload — using heuristic fallback");
+      return null;
+    }
+
+    return parsed;
+  } catch (error) {
+    console.warn("[scoring] Ollama scorer unavailable — using heuristic fallback", error);
     return null;
+  }
+}
+
+async function extractStatClaimsWithOllama(input: {
+  title?: string;
+  content: string;
+}): Promise<ExtractedStatClaim[]> {
+  const prompt = `Extract explicit numeric cricket performance claims from this article.
+Return strict JSON only in this shape:
+{
+  "claims": [
+    {
+      "player": "",
+      "metric": "runs|wickets|strike_rate|economy|overs|fours|sixes",
+      "value": 0
+    }
+  ]
+}
+
+Rules:
+- Only extract claims that mention a player and a number.
+- Only use the supported metrics.
+- Do not infer missing values.
+- Ignore team totals and vague phrases.
+- Keep at most 8 claims.
+
+Title: ${input.title || "Untitled"}
+Content:
+${input.content}`;
+
+  try {
+    const res = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: "POST",
+      headers: getOllamaHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        model: OLLAMA_BQS_MODEL,
+        prompt,
+        format: "json",
+        think: false,
+        stream: false,
+        options: {
+          temperature: 0,
+          num_predict: 300,
+        },
+      }),
+      signal: AbortSignal.timeout(60_000),
+    });
+
+    if (!res.ok) return [];
+
+    const data = (await res.json()) as OllamaGeneratePayload;
+    const parsed = parseClaimExtractionPayload(data);
+    if (!parsed?.claims || !Array.isArray(parsed.claims)) return [];
+
+    return parsed.claims
+      .filter((claim): claim is ExtractedStatClaim =>
+        Boolean(claim) &&
+        typeof claim.player === "string" &&
+        claim.player.trim().length > 0 &&
+        typeof claim.metric === "string" &&
+        typeof claim.value === "number" &&
+        Number.isFinite(claim.value)
+      )
+      .slice(0, 8);
+  } catch {
+    return [];
   }
 }
 
@@ -393,6 +708,7 @@ function heuristicScore(text: string, pp: PreProcessResult): OllamaScoreResponse
   return {
     archetype: bestArchetype,
     archetype_confidence: 0.5,
+    final_bqs: 0,
     tone_score: toneScore,
     negativity_score: negativityScore,
     toxicity_score: toxicityScore,
@@ -413,6 +729,14 @@ function heuristicScore(text: string, pp: PreProcessResult): OllamaScoreResponse
     word_count: pp.wordCount,
     lexical_diversity: pp.lexicalDiversity,
     sentence_variety: pp.sentenceVariety,
+    toxicity_penalty_applied: toxicityScore > 28,
+    toxicity_penalty_override: false,
+    writer_dna: {
+      analyst: bestArchetype === "analyst" ? 100 : 0,
+      fan: bestArchetype === "fan" ? 100 : 0,
+      storyteller: bestArchetype === "storyteller" ? 100 : 0,
+      debater: bestArchetype === "debater" ? 100 : 0,
+    },
     paragraph_scores: paragraphs.map((paragraph, index) => ({
       paragraph_index: index,
       excerpt: excerptForParagraph(paragraph),
@@ -462,6 +786,247 @@ function countVerifiedStats(text: string) {
   const statAccuracy = statsFound === 0 ? 75 : Math.min(100, Math.round((statsVerified / statsFound) * 100));
 
   return { statsFound, statsVerified, statAccuracy };
+}
+
+type ScorecardPlayerIndex = {
+  batting: BattingEntry[];
+  bowling: BowlingEntry[];
+};
+
+function normaliseName(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function buildScorecardPlayerIndex(scorecards: Scorecard[]): Map<string, ScorecardPlayerIndex> {
+  const index = new Map<string, ScorecardPlayerIndex>();
+  const surnameCounts = new Map<string, number>();
+
+  const ensure = (name: string) => {
+    const key = normaliseName(name);
+    if (!index.has(key)) {
+      index.set(key, { batting: [], bowling: [] });
+    }
+    return index.get(key)!;
+  };
+
+  for (const scorecard of scorecards) {
+    for (const row of scorecard.batting) {
+      ensure(row.batsman.name).batting.push(row);
+      const surname = normaliseName(row.batsman.name.split(" ").slice(-1).join(" "));
+      surnameCounts.set(surname, (surnameCounts.get(surname) ?? 0) + 1);
+    }
+
+    for (const row of scorecard.bowling) {
+      ensure(row.bowler.name).bowling.push(row);
+      const surname = normaliseName(row.bowler.name.split(" ").slice(-1).join(" "));
+      surnameCounts.set(surname, (surnameCounts.get(surname) ?? 0) + 1);
+    }
+  }
+
+  for (const [fullName, value] of [...index.entries()]) {
+    const surname = fullName.split(" ").slice(-1).join(" ").trim();
+    if (!surname) continue;
+    if ((surnameCounts.get(surname) ?? 0) === 1 && !index.has(surname)) {
+      index.set(surname, value);
+    }
+  }
+
+  return index;
+}
+
+function matchesClaimValue(actual: number, expected: number, metric: ExtractedStatClaim["metric"]) {
+  const tolerance =
+    metric === "strike_rate" || metric === "economy"
+      ? 0.2
+      : metric === "overs"
+        ? 0.1
+        : 0;
+
+  return Math.abs(actual - expected) <= tolerance;
+}
+
+function claimMatchesScorecard(claim: ExtractedStatClaim, playerData: ScorecardPlayerIndex | undefined) {
+  if (!playerData) return false;
+
+  if (claim.metric === "runs") {
+    return playerData.batting.some((row) => matchesClaimValue(row.r, claim.value, claim.metric));
+  }
+
+  if (claim.metric === "fours") {
+    return playerData.batting.some((row) => matchesClaimValue(row["4s"], claim.value, claim.metric));
+  }
+
+  if (claim.metric === "sixes") {
+    return playerData.batting.some((row) => matchesClaimValue(row["6s"], claim.value, claim.metric));
+  }
+
+  if (claim.metric === "strike_rate") {
+    return playerData.batting.some((row) => matchesClaimValue(Number(row.sr), claim.value, claim.metric));
+  }
+
+  if (claim.metric === "wickets") {
+    return playerData.bowling.some((row) => matchesClaimValue(row.w, claim.value, claim.metric));
+  }
+
+  if (claim.metric === "economy") {
+    return playerData.bowling.some((row) => matchesClaimValue(Number(row.eco), claim.value, claim.metric));
+  }
+
+  if (claim.metric === "overs") {
+    return playerData.bowling.some((row) => matchesClaimValue(row.o, claim.value, claim.metric));
+  }
+
+  return false;
+}
+
+async function verifyStatsAgainstLiveData(input: {
+  title?: string;
+  content: string;
+  matchId?: string | null;
+}) {
+  const fallback = countVerifiedStats(input.content);
+
+  if (!input.matchId) {
+    return {
+      source: "fallback" as const,
+      ...fallback,
+      claims: [] as Array<{ player: string; stat: string; value: string }>,
+    };
+  }
+
+  const scorecards = await getMatchScorecard(input.matchId);
+  if (!scorecards || scorecards.length === 0) {
+    return {
+      source: "fallback" as const,
+      ...fallback,
+      claims: [] as Array<{ player: string; stat: string; value: string }>,
+    };
+  }
+
+  if (!/\d/.test(input.content)) {
+    return {
+      source: "fallback" as const,
+      ...fallback,
+      claims: [] as Array<{ player: string; stat: string; value: string }>,
+    };
+  }
+
+  const claims = await extractStatClaimsWithOllama(input);
+  if (claims.length === 0) {
+    return {
+      source: "fallback" as const,
+      ...fallback,
+      claims: [] as Array<{ player: string; stat: string; value: string }>,
+    };
+  }
+
+  const playerIndex = buildScorecardPlayerIndex(scorecards);
+  const verified = claims.filter((claim: ExtractedStatClaim) =>
+    claimMatchesScorecard(claim, playerIndex.get(normaliseName(claim.player)))
+  );
+
+  return {
+    source: "live" as const,
+    statsFound: claims.length,
+    statsVerified: verified.length,
+    statAccuracy: Math.round((verified.length / claims.length) * 100),
+    claims: claims.map((claim: ExtractedStatClaim) => ({
+      player: claim.player,
+      stat: claim.metric,
+      value: String(claim.value),
+    })),
+  };
+}
+
+type DirectStatVerification = Awaited<ReturnType<typeof verifyStatsAgainstLiveData>>;
+
+function computeOverallFactAccuracy(
+  directStats: DirectStatVerification,
+  webFactCheck: WebFactCheckReport,
+  fallbackAccuracy: number
+) {
+  const directCheckable = directStats.source === "live" ? directStats.statsFound : 0;
+  const webClaims = webFactCheck.claimsResearched;
+
+  if (directCheckable > 0 && webClaims > 0) {
+    const blended =
+      (directStats.statAccuracy * directCheckable + webFactCheck.score * webClaims) /
+      (directCheckable + webClaims);
+
+    return clampScore(blended, fallbackAccuracy);
+  }
+
+  if (directCheckable > 0) {
+    return directStats.statAccuracy;
+  }
+
+  if (webClaims > 0) {
+    return webFactCheck.score;
+  }
+
+  return 75;
+}
+
+function buildFactCheckSummary(
+  directStats: DirectStatVerification,
+  webFactCheck: WebFactCheckReport
+) {
+  const parts: string[] = [];
+
+  if (directStats.source === "live" && directStats.statsFound > 0) {
+    parts.push(
+      `${directStats.statsVerified}/${directStats.statsFound} direct match stats matched against the live scorecard.`
+    );
+  } else {
+    parts.push("No source-backed direct match stat claims were available for scorecard verification.");
+  }
+
+  parts.push(webFactCheck.summary);
+
+  return parts.join(" ");
+}
+
+function buildPersistedFactCheckReport(
+  directStats: DirectStatVerification,
+  webFactCheck: WebFactCheckReport,
+  overallScore: number
+): PersistedFactCheckReport {
+  const directClaimsFound = directStats.source === "live" ? directStats.statsFound : 0;
+  const directClaimsVerified = directStats.source === "live" ? directStats.statsVerified : 0;
+  const directAccuracy = directStats.source === "live" ? directStats.statAccuracy : 0;
+
+  return {
+    overallScore,
+    summary: buildFactCheckSummary(directStats, webFactCheck),
+    searchBackend: webFactCheck.searchBackend,
+    providerAvailable: webFactCheck.providerAvailable,
+    searchError: webFactCheck.searchError ?? null,
+    directStats: {
+      source: directStats.source,
+      claimsFound: directClaimsFound,
+      claimsVerified: directClaimsVerified,
+      accuracy: directAccuracy,
+      claims: directStats.claims,
+    },
+    webClaims: {
+      claimsResearched: webFactCheck.claimsResearched,
+      supported: webFactCheck.supported,
+      contradicted: webFactCheck.contradicted,
+      inconclusive: webFactCheck.inconclusive,
+      score: webFactCheck.score,
+      summary: webFactCheck.summary,
+      verdicts: webFactCheck.verdicts.map((verdict) => ({
+        ...verdict,
+        sources: verdict.sources.map((source: FactCheckSource) => ({
+          title: source.title,
+          url: source.url,
+          snippet: source.snippet,
+          domain: source.domain,
+          publishedDate: source.publishedDate ?? null,
+        })),
+      })),
+    },
+  };
 }
 
 function normaliseParagraphScores(
@@ -604,14 +1169,22 @@ function computeBQS(
 
 // ── Full Pipeline ────────────────────────────────────────────────────
 
-export async function runScoringPipeline(input: string | { title?: string; content: string }): Promise<BlogScoreResult> {
+export async function runScoringPipeline(input: string | { title?: string; content: string; matchId?: string | null }): Promise<BlogScoreResult> {
   const started = Date.now();
   const payload = typeof input === "string" ? { content: input } : input;
   const text = payload.content;
 
   // Step 1: Pre-process (always local)
   const pp = preProcess(text);
-  const statMetrics = countVerifiedStats(text);
+  const statMetrics = await verifyStatsAgainstLiveData({
+    title: payload.title,
+    content: text,
+    matchId: payload.matchId,
+  });
+  const webFactCheck = await runWebFactCheck({
+    title: payload.title,
+    content: text,
+  });
   const fallback = heuristicScore(text, pp);
 
   // Steps 2–7: Try Ollama, fall back to heuristics
@@ -645,15 +1218,35 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     argumentLogic: clampScore(r.argument_logic, fallback.argument_logic),
   };
 
-  const { bqs, moderation } = computeBQS(
+  const overallFactAccuracy = computeOverallFactAccuracy(
+    statMetrics,
+    webFactCheck,
+    clampScore(r.stat_accuracy, statMetrics.statAccuracy)
+  );
+  const computed = computeBQS(
     modelScores,
     ruleEngineBase,
-    clampScore(r.stat_accuracy, statMetrics.statAccuracy),
+    overallFactAccuracy,
     modelScores.archetypeLabel
   );
+  const moderation = {
+    penaltyApplied:
+      typeof r.toxicity_penalty_applied === "boolean"
+        ? r.toxicity_penalty_applied
+        : computed.moderation.penaltyApplied,
+    overrideApplied:
+      typeof r.toxicity_penalty_override === "boolean"
+        ? r.toxicity_penalty_override
+        : computed.moderation.overrideApplied,
+  };
+  const bqs = clampScore(r.final_bqs, computed.bqs);
+  const writerDNASignal = normaliseWriterDNASignal(r.writer_dna, modelScores.archetypeLabel);
 
   const paragraphScores = normaliseParagraphScores(r.paragraph_scores, paragraphs, fallback);
   const explanation = buildExplanation(modelScores, ruleEngineBase, moderation, r.explanation);
+  const finalStatsVerified = statMetrics.source === "live" ? statMetrics.statsVerified : 0;
+  const finalStatAccuracy = overallFactAccuracy;
+  const factCheck = buildPersistedFactCheckReport(statMetrics, webFactCheck, finalStatAccuracy);
 
   return {
     bqs,
@@ -669,7 +1262,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     modelScores,
     nerResult: {
       entities: [],
-      statsFound: [],
+      statsFound: statMetrics.claims,
       cricketDepth: ruleEngineBase.infoDensity,
     },
     ruleEngine: {
@@ -677,12 +1270,14 @@ export async function runScoringPipeline(input: string | { title?: string; conte
       toxicityPenaltyApplied: moderation.penaltyApplied,
       toxicityPenaltyOverride: moderation.overrideApplied,
     },
+    writerDNASignal,
     paragraphScores,
     explanation,
-    statsVerified: Math.max(statMetrics.statsVerified, r.stats_verified ?? 0),
-    statAccuracy: Math.max(clampScore(r.stat_accuracy, statMetrics.statAccuracy), statMetrics.statAccuracy),
+    statsVerified: finalStatsVerified,
+    statAccuracy: finalStatAccuracy,
+    factCheck,
     processingTimeMs: Date.now() - started,
-    scoreVersion: "qwen3.5-v1",
+    scoreVersion: aiResult ? "qwen3.5-v3-hybrid-factcheck" : "heuristic-fallback-v1",
   };
 }
 
@@ -697,26 +1292,18 @@ export interface WriterDNA {
 
 export function calculateDNAUpdate(
   currentDNA: WriterDNA,
-  archetype: string,
+  signal: WriterDNA,
   bqs: number,
 ): WriterDNA {
-  const boost = bqs / 100;  // 0-1
-  const decay = 0.80;
-  const growth = 0.20;
-  const nonMatchDecay = 0.95;
+  const boost = Math.max(0.12, Math.min(0.35, bqs / 250));
+  const carry = 1 - boost;
 
-  const newDNA = { ...currentDNA };
-  const archetypeKey = archetype as keyof WriterDNA;
-
-  for (const key of Object.keys(newDNA) as (keyof WriterDNA)[]) {
-    if (key === archetypeKey) {
-      newDNA[key] = Math.min(100, Math.round(newDNA[key] * decay + boost * 100 * growth));
-    } else {
-      newDNA[key] = Math.max(0, Math.round(newDNA[key] * nonMatchDecay));
-    }
-  }
-
-  return newDNA;
+  return {
+    analyst: Math.round((currentDNA.analyst * carry + signal.analyst * boost) * 10) / 10,
+    fan: Math.round((currentDNA.fan * carry + signal.fan * boost) * 10) / 10,
+    storyteller: Math.round((currentDNA.storyteller * carry + signal.storyteller * boost) * 10) / 10,
+    debater: Math.round((currentDNA.debater * carry + signal.debater * boost) * 10) / 10,
+  };
 }
 
 // ── Writer Title Derivation ──────────────────────────────────────────

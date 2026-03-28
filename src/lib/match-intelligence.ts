@@ -6,8 +6,9 @@ import type {
   Scorecard,
   Squad,
 } from "@/types/cricket";
+import { getOllamaHeaders, getOllamaUrl, OLLAMA_REQUEST_TIMEOUT_MS } from "@/lib/ollama";
 
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_MATCH_MODEL =
   process.env.OLLAMA_MATCH_MODEL || process.env.OLLAMA_BQS_MODEL || process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
@@ -61,18 +62,19 @@ async function generateStructuredNarrative<T>(prompt: string): Promise<T | null>
   try {
     const res = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getOllamaHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         model: OLLAMA_MATCH_MODEL,
         prompt,
         format: "json",
+        think: false,
         stream: false,
         options: {
           temperature: 0.2,
           num_predict: 500,
         },
       }),
-      signal: AbortSignal.timeout(25_000),
+      signal: AbortSignal.timeout(OLLAMA_REQUEST_TIMEOUT_MS),
     });
 
     if (!res.ok) return null;

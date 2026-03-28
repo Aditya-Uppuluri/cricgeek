@@ -49,11 +49,14 @@ Minimum required:
 - `CRICKET_API_KEY`
 - `CRICKET_SERIES_ID_IPL`
 - `OLLAMA_URL`
+- `OLLAMA_BASE_URL` if you run the Python AI service separately
 - `OLLAMA_BQS_MODEL`
 - `OLLAMA_MATCH_MODEL`
 
 Recommended defaults:
 - `ALLOW_MOCK_MATCH_DATA=false`
+- `OLLAMA_URL=http://ec2-16-16-184-21.eu-north-1.compute.amazonaws.com:11434`
+- `OLLAMA_BASE_URL=http://ec2-16-16-184-21.eu-north-1.compute.amazonaws.com:11434`
 - `OLLAMA_MODEL=qwen3.5:latest`
 - `OLLAMA_BQS_MODEL=qwen3.5:latest`
 - `OLLAMA_MATCH_MODEL=qwen3.5:latest`
@@ -71,6 +74,11 @@ If `OLLAMA_URL` is not reachable from production:
 - BQS analysis will fall back to heuristics
 - tag generation may fail or degrade
 - match preview/post-match narrative generation will fall back to deterministic summaries
+
+For an EC2-hosted Ollama instance, make sure:
+- the EC2 security group allows inbound TCP `11434` from your app host
+- Ollama is bound to a non-loopback interface, for example `OLLAMA_HOST=0.0.0.0:11434`
+- `curl http://ec2-16-16-184-21.eu-north-1.compute.amazonaws.com:11434/api/tags` works from the app host
 
 ## 6. Google Auth setup
 

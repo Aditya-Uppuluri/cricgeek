@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Bold, Italic, Strikethrough, Heading1, Heading2, Quote, List,
@@ -32,8 +32,16 @@ const OVERS_MESSAGES = [
   { max: Infinity, msg: "A proper Test innings" },
 ];
 
-export default function WriteBlogPage() {
+function WriteBlogPageContent() {
   const searchParams = useSearchParams();
+  const [activeContests, setActiveContests] = useState<Array<{
+    id: string;
+    title: string;
+    shortBlogMaxWords: number;
+    prize?: string | null;
+    endDate: string;
+  }>>([]);
+  const [contestId, setContestId] = useState("");
   const [sessionUserId, setSessionUserId] = useState<string | null>(null);
   const [sessionUserRole, setSessionUserRole] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -122,6 +130,20 @@ export default function WriteBlogPage() {
     const interval = setInterval(autoSave, 30000);
     return () => clearInterval(interval);
   }, [autoSave]);
+
+  useEffect(() => {
+    async function loadContests() {
+      try {
+        const res = await fetch("/api/contests?active=true");
+        const data = await res.json();
+        setActiveContests(data.contests || []);
+      } catch {
+        setActiveContests([]);
+      }
+    }
+
+    void loadContests();
+  }, []);
 
   useEffect(() => {
     async function loadSession() {
@@ -222,7 +244,13 @@ export default function WriteBlogPage() {
       const res = await fetch("/api/blogs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title, content, tags, matchId: linkedMatchId || null }),
+        body: JSON.stringify({
+          title,
+          content,
+          tags,
+          matchId: linkedMatchId || null,
+          contestId: contestId || null,
+        }),
       });
 
       const data = await res.json();
@@ -304,7 +332,7 @@ export default function WriteBlogPage() {
                 <Link href="/blog" className="bg-cg-green text-black py-2.5 rounded-lg font-bold text-sm hover:bg-cg-green-dark transition-all block">
                   📰 Read Today&apos;s Blogs
                 </Link>
-                <button onClick={() => { setSubmitted(false); setTitle(""); setContent(""); setTags(""); setPipelineStatus({}); }} className="bg-white/5 text-white py-2.5 rounded-lg font-medium text-sm hover:bg-white/10 transition-all border border-gray-700">
+                <button onClick={() => { setSubmitted(false); setTitle(""); setContent(""); setTags(""); setContestId(""); setPipelineStatus({}); }} className="bg-white/5 text-white py-2.5 rounded-lg font-medium text-sm hover:bg-white/10 transition-all border border-gray-700">
                   ✍️ Start Another Blog
                 </button>
               </div>
@@ -524,6 +552,33 @@ export default function WriteBlogPage() {
             )}
           </div>
 
+          {activeContests.length > 0 && (
+            <div>
+              <label className={`mb-1.5 block text-sm font-medium ${nightMode ? "text-gray-300" : "text-gray-600"}`}>
+                Contest Submission
+              </label>
+              <select
+                value={contestId}
+                onChange={(event) => setContestId(event.target.value)}
+                className={`w-full rounded-lg border bg-transparent px-4 py-2.5 text-sm focus:border-cg-green focus:outline-none ${
+                  nightMode ? "border-gray-800 text-white" : "border-gray-300 text-gray-800"
+                }`}
+              >
+                <option value="">Regular blog post</option>
+                {activeContests.map((contest) => (
+                  <option key={contest.id} value={contest.id} className="bg-cg-dark text-white">
+                    {contest.title} · max {contest.shortBlogMaxWords} words
+                  </option>
+                ))}
+              </select>
+              {contestId && (
+                <p className="mt-1.5 text-xs text-cg-green">
+                  Short-blog contest selected. Keep this entry within the contest word cap for ranking.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Submit */}
           <button
             type="submit"
@@ -575,5 +630,25 @@ export default function WriteBlogPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function WriteBlogPageFallback() {
+  return (
+    <div className="min-h-screen bg-cg-dark-1 text-white px-4 py-10">
+      <div className="mx-auto max-w-5xl space-y-4 animate-pulse">
+        <div className="h-10 w-1/3 rounded bg-cg-dark-2" />
+        <div className="h-12 w-full rounded bg-cg-dark-2" />
+        <div className="h-80 w-full rounded bg-cg-dark-2" />
+      </div>
+    </div>
+  );
+}
+
+export default function WriteBlogPage() {
+  return (
+    <Suspense fallback={<WriteBlogPageFallback />}>
+      <WriteBlogPageContent />
+    </Suspense>
   );
 }

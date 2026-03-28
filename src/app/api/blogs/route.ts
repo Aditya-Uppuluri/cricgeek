@@ -5,6 +5,7 @@ import { screenSubmittedWriting } from "@/lib/content-moderation";
 import { extractMentionSignals, getPersonalizationScore } from "@/lib/personalization";
 import { canPublishBlogs } from "@/lib/roles";
 import { slugify } from "@/lib/utils";
+import { resolveContestStatus } from "@/lib/contest";
 
 // GET all approved blogs
 export async function GET(req: NextRequest) {
@@ -186,7 +187,7 @@ export async function POST(req: NextRequest) {
   try {
     const session = await auth();
     const user = session?.user as { id: string; role?: string } | undefined;
-    const { title, content, tags, matchId } = await req.json();
+    const { title, content, tags, matchId, contestId } = await req.json();
 
     if (!user?.id) {
       return NextResponse.json(
@@ -214,6 +215,8 @@ export async function POST(req: NextRequest) {
     const cleanTags = String(tags || "").trim();
     const cleanMatchId =
       typeof matchId === "string" && matchId.trim().length > 0 ? matchId.trim() : null;
+    const cleanContestId =
+      typeof contestId === "string" && contestId.trim().length > 0 ? contestId.trim() : null;
 
     // Word count validation (50-2000 words)
     const wordCount = cleanContent.split(/\s+/).filter(Boolean).length;
@@ -244,6 +247,46 @@ export async function POST(req: NextRequest) {
       tags: cleanTags,
     });
 
+    let contest = null;
+
+    if (cleanContestId) {
+      contest = await prisma.contest.findUnique({
+        where: { id: cleanContestId },
+      });
+
+      if (!contest) {
+        return NextResponse.json({ error: "Contest not found" }, { status: 404 });
+      }
+
+      if (resolveContestStatus(contest) !== "active") {
+        return NextResponse.json({ error: "This contest is not accepting submissions right now." }, { status: 400 });
+      }
+
+      if (wordCount > contest.shortBlogMaxWords) {
+        return NextResponse.json(
+          {
+            error: `Contest entries must be ${contest.shortBlogMaxWords} words or fewer. Current: ${wordCount} words`,
+          },
+          { status: 400 }
+        );
+      }
+
+      const existingSubmission = await prisma.contestSubmission.findFirst({
+        where: {
+          contestId: contest.id,
+          authorId: user.id,
+        },
+        select: { id: true },
+      });
+
+      if (existingSubmission) {
+        return NextResponse.json(
+          { error: "You have already submitted a short blog to this contest." },
+          { status: 409 }
+        );
+      }
+    }
+
     const blog = await prisma.blog.create({
       data: {
         title: cleanTitle,
@@ -259,8 +302,18 @@ export async function POST(req: NextRequest) {
       },
     });
 
+    if (contest) {
+      await prisma.contestSubmission.create({
+        data: {
+          contestId: contest.id,
+          blogId: blog.id,
+          authorId: user.id,
+        },
+      });
+    }
+
     return NextResponse.json(
-      { message: "Blog submitted for review", blog },
+      { message: contest ? "Contest entry submitted" : "Blog submitted for review", blog, contestId: contest?.id ?? null },
       { status: 201 }
     );
   } catch (error) {

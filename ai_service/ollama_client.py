@@ -1,7 +1,7 @@
 """
 CricGeek — Ollama Client
 
-Local LLM integration via Ollama's REST API (http://localhost:11434).
+Ollama REST API integration.
 Supports any model pulled into Ollama (Qwen, Llama, Mistral, etc.).
 
 Default model: qwen2.5 (configurable via OLLAMA_MODEL env var)
@@ -17,7 +17,7 @@ import httpx
 
 logger = logging.getLogger("ollama")
 
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL") or os.getenv("OLLAMA_URL") or "http://localhost:11434"
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5")
 OLLAMA_TIMEOUT = 60.0  # Local models can be slow on first load
 

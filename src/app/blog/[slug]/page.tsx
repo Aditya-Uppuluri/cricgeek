@@ -85,6 +85,42 @@ interface BlogData {
       penaltyDecision?: string;
       userVisibleBreakdown?: string[];
     } | null;
+    factCheckJson?: {
+      overallScore: number;
+      summary?: string;
+      searchBackend?: string;
+      providerAvailable?: boolean;
+      searchError?: string | null;
+      directStats?: {
+        source?: "live" | "fallback";
+        claimsFound?: number;
+        claimsVerified?: number;
+        accuracy?: number;
+      } | null;
+      webClaims?: {
+        claimsResearched?: number;
+        supported?: number;
+        contradicted?: number;
+        inconclusive?: number;
+        score?: number;
+        summary?: string;
+        verdicts?: Array<{
+          claim: string;
+          query: string;
+          category: string;
+          verdict: "supported" | "contradicted" | "inconclusive";
+          confidence: number;
+          evidence: string;
+          sources: Array<{
+            title: string;
+            url: string;
+            snippet: string;
+            domain: string;
+            publishedDate?: string | null;
+          }>;
+        }>;
+      } | null;
+    } | null;
     toxicityPenaltyApplied?: boolean;
     toxicityPenaltyOverride?: boolean;
     scoreVersion?: string;
@@ -115,6 +151,27 @@ function getBarColor(val: number): string {
   if (val >= 60) return "bg-yellow-500";
   if (val >= 40) return "bg-orange-500";
   return "bg-red-500";
+}
+
+function getFactVerdictMeta(verdict: string): { label: string; className: string } {
+  if (verdict === "supported") {
+    return {
+      label: "Supported",
+      className: "border-cg-green/30 bg-cg-green/10 text-cg-green",
+    };
+  }
+
+  if (verdict === "contradicted") {
+    return {
+      label: "Contradicted",
+      className: "border-red-500/30 bg-red-500/10 text-red-300",
+    };
+  }
+
+  return {
+    label: "Inconclusive",
+    className: "border-amber-500/30 bg-amber-500/10 text-amber-300",
+  };
 }
 
 // BCS tier display
@@ -262,7 +319,7 @@ export default function BlogSlugPage({
         { label: "Negativity",      value: 100 - blog.score.negativityScore, icon: "🌧️" },
         { label: "Argument Logic",  value: blog.score.argumentLogic ?? 0, icon: "⚖️" },
         { label: "Info Density",    value: blog.score.infoDensity,        icon: "📈" },
-        { label: "Stat Accuracy",   value: blog.score.statAccuracy,       icon: "✅" },
+        { label: "Fact Accuracy",   value: blog.score.statAccuracy,       icon: "✅" },
         { label: "Toxicity Free",   value: 100 - blog.score.toxicityScore,icon: "🧤" },
       ]
     : [];
@@ -385,7 +442,7 @@ export default function BlogSlugPage({
                   <p className="font-bold text-sm text-white">
                     {Math.round(blog.authorProfile.statAccuracy ?? 0)}%
                   </p>
-                  <p className="text-[10px]">Stat Acc.</p>
+                  <p className="text-[10px]">Fact Acc.</p>
                 </div>
                 <Link
                   href={`/writer/${blog.author.id}`}
@@ -453,8 +510,13 @@ export default function BlogSlugPage({
                     <span>📝 {blog.score.wordCount} words</span>
                     {blog.score.scoreVersion && <span>🧠 {blog.score.scoreVersion}</span>}
                     <span>
-                      ✅ {blog.score.statsVerified}/{blog.score.statsFound} stats verified
+                      ✅ {blog.score.statsVerified}/{blog.score.statsFound} direct stats verified
                     </span>
+                    {blog.score.factCheckJson?.webClaims?.claimsResearched ? (
+                      <span>
+                        🌐 {blog.score.factCheckJson.webClaims.claimsResearched} web claims checked
+                      </span>
+                    ) : null}
                     {blog.score.toxicityPenaltyOverride && <span>🛡️ Toxicity override reduced</span>}
                   </div>
                 </div>
@@ -505,6 +567,105 @@ export default function BlogSlugPage({
             </div>
           )}
 
+          {blog.score?.factCheckJson && (
+            <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 space-y-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-white">Source-Backed Fact Check</h3>
+                  <p className="mt-2 text-sm leading-7 text-gray-300">
+                    {blog.score.factCheckJson.summary || "Source-backed claim verification is available for this article."}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-800 bg-cg-dark px-3 py-2 text-right">
+                  <p className="text-[10px] uppercase tracking-wide text-gray-500">Fact Accuracy</p>
+                  <p className={`text-lg font-black ${getBQSColor(blog.score.factCheckJson.overallScore)}`}>
+                    {Math.round(blog.score.factCheckJson.overallScore)}%
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Direct Match Stats</p>
+                  <p className="mt-2 text-lg font-black text-white">
+                    {blog.score.factCheckJson.directStats?.claimsVerified ?? 0}/{blog.score.factCheckJson.directStats?.claimsFound ?? 0}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400">Scorecard verified</p>
+                </div>
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Broader Web Claims</p>
+                  <p className="mt-2 text-lg font-black text-white">
+                    {blog.score.factCheckJson.webClaims?.claimsResearched ?? 0}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Checked via {blog.score.factCheckJson.searchBackend || "no backend"}
+                  </p>
+                  {blog.score.factCheckJson.searchError ? (
+                    <p className="mt-2 text-xs text-red-400">
+                      {blog.score.factCheckJson.searchError}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Web Verdict Split</p>
+                  <p className="mt-2 text-sm text-gray-300">
+                    ✅ {blog.score.factCheckJson.webClaims?.supported ?? 0} supported
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    ❌ {blog.score.factCheckJson.webClaims?.contradicted ?? 0} contradicted
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    ⚪ {blog.score.factCheckJson.webClaims?.inconclusive ?? 0} inconclusive
+                  </p>
+                </div>
+              </div>
+
+              {blog.score.factCheckJson.webClaims?.verdicts && blog.score.factCheckJson.webClaims.verdicts.length > 0 ? (
+                <div className="space-y-3">
+                  {blog.score.factCheckJson.webClaims.verdicts.map((verdict) => {
+                    const verdictMeta = getFactVerdictMeta(verdict.verdict);
+
+                    return (
+                      <div key={`${verdict.claim}:${verdict.query}`} className="rounded-xl border border-gray-800 bg-cg-dark p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${verdictMeta.className}`}>
+                            {verdictMeta.label}
+                          </span>
+                          <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-gray-300">
+                            {Math.round(verdict.confidence * 100)}% confidence
+                          </span>
+                          <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-gray-500">
+                            {verdict.category}
+                          </span>
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-white">{verdict.claim}</p>
+                        <p className="mt-2 text-sm text-gray-300">{verdict.evidence}</p>
+
+                        {verdict.sources.length > 0 ? (
+                          <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2">
+                            {verdict.sources.map((source) => (
+                              <a
+                                key={`${verdict.claim}:${source.url}`}
+                                href={source.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="rounded-lg border border-gray-800 bg-cg-dark-2 p-3 transition-colors hover:border-cg-green/40"
+                              >
+                                <p className="text-xs font-semibold text-white">{source.title || source.domain}</p>
+                                <p className="mt-1 text-[11px] uppercase tracking-wide text-gray-500">{source.domain}</p>
+                                <p className="mt-2 text-xs leading-6 text-gray-400">{source.snippet}</p>
+                              </a>
+                            ))}
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          )}
+
           {/* ── Section 5: Blog Content ────────────────────────────── */}
           <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl p-6 sm:p-8">
             {/* Stats verified banner */}
@@ -512,7 +673,7 @@ export default function BlogSlugPage({
               <div className="bg-cg-green/5 border border-cg-green/20 rounded-lg px-4 py-2 mb-6 flex items-center gap-2 text-sm">
                 <span className="text-cg-green">✅</span>
                 <span className="text-gray-300">
-                  {blog.score.statsVerified}/{blog.score.statsFound} stats verified by AI
+                  {blog.score.statsVerified}/{blog.score.statsFound} direct match stats verified from the scorecard
                 </span>
               </div>
             )}

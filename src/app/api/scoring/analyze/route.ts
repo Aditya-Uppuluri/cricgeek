@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
+import { recomputeContestLeaderboard } from "@/lib/contest";
 import {
   runScoringPipeline,
   calculateDNAUpdate,
@@ -11,6 +12,9 @@ import {
   DNA_ACHIEVEMENT_DEFINITIONS,
   type WriterDNA,
 } from "@/lib/scoring";
+
+export const runtime = "nodejs";
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   try {
@@ -40,7 +44,11 @@ export async function POST(req: NextRequest) {
     const result = await runScoringPipeline({
       title: blog.title,
       content: blog.content,
+      matchId: blog.matchTag,
     });
+    const paragraphScoresJson = result.paragraphScores as unknown as Prisma.InputJsonValue;
+    const explanationJson = result.explanation as unknown as Prisma.InputJsonValue;
+    const factCheckJson = result.factCheck as unknown as Prisma.InputJsonValue;
 
     // ── Save BlogScore ───────────────────────────────────────────────
     const blogScore = await prisma.blogScore.upsert({
@@ -66,8 +74,9 @@ export async function POST(req: NextRequest) {
         infoDensity: result.ruleEngine.infoDensity,
         repetitionPenalty: result.ruleEngine.repetitionPenalty,
         completeness: result.ruleEngine.completeness,
-        paragraphScores: result.paragraphScores as unknown as Prisma.JsonArray,
-        explanationJson: result.explanation as unknown as Prisma.JsonObject,
+        paragraphScores: paragraphScoresJson,
+        explanationJson,
+        factCheckJson,
         toxicityPenaltyApplied: result.ruleEngine.toxicityPenaltyApplied,
         toxicityPenaltyOverride: result.ruleEngine.toxicityPenaltyOverride,
         scoreVersion: result.scoreVersion,
@@ -97,8 +106,9 @@ export async function POST(req: NextRequest) {
         infoDensity: result.ruleEngine.infoDensity,
         repetitionPenalty: result.ruleEngine.repetitionPenalty,
         completeness: result.ruleEngine.completeness,
-        paragraphScores: result.paragraphScores as unknown as Prisma.JsonArray,
-        explanationJson: result.explanation as unknown as Prisma.JsonObject,
+        paragraphScores: paragraphScoresJson,
+        explanationJson,
+        factCheckJson,
         toxicityPenaltyApplied: result.ruleEngine.toxicityPenaltyApplied,
         toxicityPenaltyOverride: result.ruleEngine.toxicityPenaltyOverride,
         scoreVersion: result.scoreVersion,
@@ -179,7 +189,7 @@ export async function POST(req: NextRequest) {
       debater: currentDNA.debater,
     };
 
-    const newDNA = calculateDNAUpdate(prevDNA, result.modelScores.archetypeLabel, result.bqs);
+    const newDNA = calculateDNAUpdate(prevDNA, result.writerDNASignal, result.bqs);
     const writerTitle = calculateWriterTitle(newDNA);
 
     await prisma.writerDNA.update({
@@ -192,6 +202,23 @@ export async function POST(req: NextRequest) {
       where: { userId: blog.authorId },
       data: { writerTitle },
     });
+
+    const contestSubmission = await prisma.contestSubmission.findUnique({
+      where: { blogId },
+      select: { id: true, contestId: true, adminOverrideScore: true },
+    });
+
+    if (contestSubmission) {
+      await prisma.contestSubmission.update({
+        where: { id: contestSubmission.id },
+        data: {
+          aiScoreSnapshot: result.bqs,
+          finalScore: contestSubmission.adminOverrideScore ?? result.bqs,
+        },
+      });
+
+      await recomputeContestLeaderboard(contestSubmission.contestId);
+    }
 
     // ── Check Badges ─────────────────────────────────────────────────
     const existingBadges = await prisma.writerBadge.findMany({

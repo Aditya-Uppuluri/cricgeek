@@ -33,6 +33,7 @@ model User {
   following          WriterFollow[]          @relation("WriterFollowFollower")
   followers          WriterFollow[]          @relation("WriterFollowWriter")
   feedPreferences    UserFeedPreference?
+  contestSubmissions ContestSubmission[]
 }
 
 model Blog {
@@ -57,6 +58,7 @@ model Blog {
   reports   Report[]
   reactions BlogReaction[]
   saves     SavedBlog[]
+  contestSubmissions ContestSubmission[]
 
   @@index([authorId], map: "Blog_authorId_fkey")
 }
@@ -96,16 +98,45 @@ model Report {
 }
 
 model Contest {
-  id          String   @id @default(cuid()) @db.VarChar(30)
-  title       String   @db.VarChar(200)
-  description String   @db.Text
-  rules       String?  @db.Text
-  startDate   DateTime
-  endDate     DateTime
-  status      String   @default("upcoming") @db.VarChar(20)
-  prize       String?  @db.VarChar(200)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                    String              @id @default(cuid()) @db.VarChar(30)
+  title                 String              @db.VarChar(200)
+  description           String              @db.Text
+  rules                 String?             @db.Text
+  startDate             DateTime
+  endDate               DateTime
+  status                String              @default("upcoming") @db.VarChar(20)
+  prize                 String?             @db.VarChar(200)
+  shortBlogMaxWords     Int                 @default(350)
+  allowAdminOverride    Boolean             @default(true)
+  announcementTitle     String?             @db.VarChar(200)
+  announcementBody      String?             @db.Text
+  announcementPublishedAt DateTime?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  submissions           ContestSubmission[]
+}
+
+model ContestSubmission {
+  id                 String   @id @default(cuid()) @db.VarChar(30)
+  contestId          String   @db.VarChar(30)
+  blogId             String   @unique @db.VarChar(30)
+  authorId           String   @db.VarChar(30)
+  aiScoreSnapshot    Float    @default(0)
+  finalScore         Float    @default(0)
+  adminOverrideScore Float?
+  ranking            Int?
+  winnerPosition     Int?
+  awardedPrize       String?  @db.VarChar(200)
+  notes              String?  @db.Text
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+  contest            Contest  @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  blog               Blog     @relation(fields: [blogId], references: [id], onDelete: Cascade)
+  author             User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  @@unique([contestId, authorId])
+  @@index([contestId, finalScore], map: "ContestSubmission_contestId_finalScore_idx")
+  @@index([contestId, ranking], map: "ContestSubmission_contestId_ranking_idx")
 }
 
 model FeaturedContent {
@@ -167,6 +198,7 @@ model BlogScore {
   completeness        Float    @default(0)
   paragraphScores     Json?
   explanationJson     Json?
+  factCheckJson       Json?
   toxicityPenaltyApplied Boolean @default(false)
   toxicityPenaltyOverride Boolean @default(false)
   scoreVersion        String   @default("qwen3.5-v1") @db.VarChar(40)

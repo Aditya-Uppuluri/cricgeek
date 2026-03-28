@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getOllamaHeaders, getOllamaUrl, OLLAMA_REQUEST_TIMEOUT_MS } from "@/lib/ollama";
 
-const OLLAMA_URL = process.env.OLLAMA_URL || "http://localhost:11434";
+const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
 export async function POST(req: NextRequest) {
@@ -32,10 +33,11 @@ Tags:`;
 
     const response = await fetch(`${OLLAMA_URL}/api/generate`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: getOllamaHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         model: OLLAMA_MODEL,
         prompt,
+        think: false,
         stream: false,
         options: {
           temperature: 0.3,
@@ -43,7 +45,7 @@ Tags:`;
           stop: ["\n", ".", "Tags:", "Blog"],
         },
       }),
-      signal: AbortSignal.timeout(15000), // 15s timeout
+      signal: AbortSignal.timeout(OLLAMA_REQUEST_TIMEOUT_MS),
     });
 
     if (!response.ok) {
@@ -90,7 +92,7 @@ Tags:`;
       return NextResponse.json(
         {
           error: isTimeout
-            ? "Ollama took too long to respond (>15s)"
+            ? "Ollama took too long to respond"
             : "Could not connect to Ollama — is it running? Run: ollama serve",
           ollama_url: OLLAMA_URL,
         },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { Suspense, useEffect, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { PenSquare, Clock, Eye, MessageSquare, Search, Trophy, TrendingUp } from "lucide-react";
@@ -42,7 +42,7 @@ function getScoreBg(bqs: number): string {
   return "bg-red-400/10";
 }
 
-export default function BlogPage() {
+function BlogPageContent() {
   const searchParams = useSearchParams();
   const [blogs, setBlogs] = useState<Blog[]>([]);
   const [loading, setLoading] = useState(true);
@@ -319,5 +319,32 @@ export default function BlogPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function BlogPageFallback() {
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <div className="space-y-4">
+        {[1, 2, 3].map((index) => (
+          <div
+            key={index}
+            className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 animate-pulse"
+          >
+            <div className="h-5 bg-gray-800 rounded w-3/4 mb-3" />
+            <div className="h-4 bg-gray-800 rounded w-full mb-2" />
+            <div className="h-4 bg-gray-800 rounded w-2/3" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export default function BlogPage() {
+  return (
+    <Suspense fallback={<BlogPageFallback />}>
+      <BlogPageContent />
+    </Suspense>
   );
 }
