@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect, useCallback } from "react";
+import { useSession } from "next-auth/react";
 import {
   Shield, FileText, Trophy, Star, Check, X, AlertTriangle, Plus,
   Brain, Activity, BarChart3, Zap, TrendingUp
@@ -62,6 +63,7 @@ const PIPELINE_MODELS = [
 ];
 
 export default function AdminPage() {
+  const { data: session, status } = useSession();
   const [activeTab, setActiveTab] = useState<AdminTab>("blogs");
   const [blogs, setBlogs] = useState<AdminBlog[]>([]);
   const [statusFilter, setStatusFilter] = useState("pending");
@@ -82,23 +84,18 @@ export default function AdminPage() {
   const [announcementDrafts, setAnnouncementDrafts] = useState<Record<string, { title: string; body: string }>>({});
 
   useEffect(() => {
-    async function loadSession() {
-      try {
-        const res = await fetch("/api/auth/session");
-        const session = await res.json();
-        if (!session?.user) {
-          setAuthState("guest");
-          return;
-        }
-
-        setAuthState(session.user.role === "admin" ? "admin" : "user");
-      } catch {
-        setAuthState("guest");
-      }
+    if (status === "loading") {
+      setAuthState("loading");
+      return;
     }
 
-    void loadSession();
-  }, []);
+    if (!session?.user) {
+      setAuthState("guest");
+      return;
+    }
+
+    setAuthState((session.user as { role?: string }).role === "admin" ? "admin" : "user");
+  }, [session, status]);
 
   const fetchBlogs = useCallback(async () => {
     setLoading(true);

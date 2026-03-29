@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useEffect } from "react";
-import { signOut } from "next-auth/react";
+import { useState } from "react";
+import { signOut, useSession } from "next-auth/react";
 import {
   Menu,
   X,
@@ -34,39 +34,14 @@ interface UserSession {
 }
 
 export default function Navbar() {
+  const { data: session, status } = useSession();
   const [isOpen, setIsOpen] = useState(false);
-  const [user, setUser] = useState<UserSession | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
-
-  useEffect(() => {
-    const checkUser = async () => {
-      try {
-        const res = await fetch("/api/auth/session");
-        const session = await res.json();
-        if (session?.user) {
-          setUser(session.user as UserSession);
-        } else {
-          setUser(null);
-        }
-      } catch {
-        setUser(null);
-      }
-    };
-
-    checkUser();
-    window.addEventListener("auth-change", checkUser);
-    window.addEventListener("storage", checkUser);
-
-    return () => {
-      window.removeEventListener("auth-change", checkUser);
-      window.removeEventListener("storage", checkUser);
-    };
-  }, []);
+  const user = (session?.user as UserSession | undefined) ?? null;
+  const authLoading = status === "loading";
 
   const handleSignOut = () => {
-    setUser(null);
     setShowDropdown(false);
-    window.dispatchEvent(new Event("auth-change"));
     void signOut({ redirectTo: "/" });
   };
 
@@ -108,7 +83,9 @@ export default function Navbar() {
               <Search size={18} />
             </button>
 
-            {user ? (
+            {authLoading ? (
+              <div className="h-10 w-28 animate-pulse rounded-xl border border-gray-700 bg-cg-dark-2" />
+            ) : user ? (
               /* Logged in — User Dropdown */
               <div className="relative">
                 <button
@@ -207,7 +184,9 @@ export default function Navbar() {
             ))}
             <hr className="border-gray-800 my-2" />
 
-            {user ? (
+            {authLoading ? (
+              <div className="px-3 py-3 text-sm text-gray-500">Checking session...</div>
+            ) : user ? (
               <>
                 <div className="flex items-center gap-3 px-3 py-3">
                   <div className="w-9 h-9 rounded-full bg-cg-green/20 flex items-center justify-center text-sm font-bold text-cg-green">

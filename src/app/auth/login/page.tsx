@@ -3,7 +3,7 @@
 import { useState, Suspense } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { signIn } from "next-auth/react";
+import { getSession, signIn } from "next-auth/react";
 import { Eye, EyeOff, Mail, Lock, ArrowRight, Chrome } from "lucide-react";
 
 const CRICKET_FACTS = [
@@ -34,13 +34,13 @@ function LoginContent() {
     setLoading(true);
 
     try {
-      const callbackUrl = next || redirect || "/";
+      const requestedCallbackUrl = next || redirect || "/";
 
       const result = await signIn("credentials", {
         email,
         password,
         redirect: false,
-        callbackUrl,
+        callbackUrl: requestedCallbackUrl,
       });
 
       if (!result || result.error) {
@@ -48,7 +48,13 @@ function LoginContent() {
         return;
       }
 
-      router.push(result.url || callbackUrl);
+      const session = await getSession();
+      const defaultCallbackUrl =
+        !next && !redirect && (session?.user as { role?: string } | undefined)?.role === "admin"
+          ? "/admin"
+          : requestedCallbackUrl;
+
+      router.replace(result.url || defaultCallbackUrl);
       router.refresh();
     } catch {
       setError("Something went wrong. Please try again.");
