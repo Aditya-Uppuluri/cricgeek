@@ -299,6 +299,92 @@ function excerptForParagraph(paragraph: string): string {
   return paragraph.replace(/\s+/g, " ").trim().slice(0, 120);
 }
 
+function countRegexHits(text: string, patterns: RegExp[]): number {
+  return patterns.reduce((sum, pattern) => sum + (pattern.test(text) ? 1 : 0), 0);
+}
+
+function detectSarcasticRidicule(text: string) {
+  const normalised = text.toLowerCase();
+
+  const mockPraisePatterns = [
+    /\bmasterclass\b/,
+    /\bvisionary\b/,
+    /\binspiring\b/,
+    /\bgenius\b/,
+    /\blegendary\b/,
+    /\bbrilliant\b/,
+  ];
+
+  const ridiculePatterns = [
+    /\btest the patience\b/,
+    /\bmeditation retreat\b/,
+    /\bfive stages of grief\b/,
+    /\bforbidden knowledge\b/,
+    /\boptional feature\b/,
+    /\bgeological era\b/,
+    /\brare art\b/,
+    /\bnobody knows whether\b/,
+    /\bby the time he finally gets going\b/,
+    /\bpreserving batting\b/,
+  ];
+
+  const belittlingPatterns = [
+    /\bslow\b/,
+    /\bobsolete\b/,
+    /\bfinished\b/,
+    /\bwashed\b/,
+    /\buseless\b/,
+    /\bjoke\b/,
+    /\bpathetic\b/,
+    /\blaughable\b/,
+  ];
+
+  const evidencePatterns = [
+    /\baverage\b/,
+    /\bstrike rate\b/,
+    /\beconomy\b/,
+    /\bruns\b/,
+    /\bwickets\b/,
+    /\bdata\b/,
+    /\bstat(s)?\b/,
+    /\binnings\b/,
+    /\bphase\b/,
+    /\brole\b/,
+    /\bmatch\b/,
+  ];
+
+  const mockPraiseHits = countRegexHits(normalised, mockPraisePatterns);
+  const ridiculeHits = countRegexHits(normalised, ridiculePatterns);
+  const belittlingHits = countRegexHits(normalised, belittlingPatterns);
+  const evidenceHits = countRegexHits(normalised, evidencePatterns);
+  const targetedNameHits = countRegexHits(normalised, [
+    /\bdhoni\b/,
+    /\bkohli\b/,
+    /\brohit\b/,
+    /\bgill\b/,
+    /\bjadeja\b/,
+    /\brahane\b/,
+    /\bpant\b/,
+    /\bbuttler\b/,
+    /\bms dhoni\b/,
+    /\bvirat\b/,
+  ]);
+
+  const sarcasticRidicule =
+    ridiculeHits >= 2 || (mockPraiseHits >= 1 && ridiculeHits >= 1) || (belittlingHits >= 2 && targetedNameHits >= 1);
+  const lowEvidenceAttack = sarcasticRidicule && evidenceHits <= 2;
+
+  return {
+    sarcasticRidicule,
+    mockPraiseHits,
+    ridiculeHits,
+    belittlingHits,
+    evidenceHits,
+    targetedNameHits,
+    lowEvidenceAttack,
+  };
+}
+
 function extractJsonObjects(candidate: string): string[] {
   const objects: string[] = [];
   let depth = 0;
@@ -484,6 +570,10 @@ Important moderation rule:
 - Strong criticism or disappointment is NEGATIVITY, not toxicity.
 - Toxicity means insults, abuse, dehumanisation, slurs, harassment, or targeted hostility.
 - If the article is sharp but evidence-based and constructive, keep toxicity low.
+- But sarcastic mock praise, ridicule, humiliation framing, or sneering metaphors aimed at a player/coach/person are NOT toxicity-free.
+- If the writing makes a person look laughable, obsolete, pathetic, or like a joke through irony or exaggerated praise, raise toxicity meaningfully even without profanity.
+- Constructiveness should be low when the piece mostly mocks a person instead of building a cricket argument.
+- Example of moderate toxicity: "visionary, really", "masterclass in suspense", "optional feature", "different geological era" when used to ridicule a named player.
 
 Use these archetypes only: analyst, fan, storyteller, debater.
 
@@ -1061,7 +1151,8 @@ function buildExplanation(
   model: ModelScores,
   ruleEngine: Omit<RuleEngineResult, "toxicityPenaltyApplied" | "toxicityPenaltyOverride">,
   moderation: { penaltyApplied: boolean; overrideApplied: boolean },
-  aiExplanation: OllamaScoreResponse["explanation"] | undefined
+  aiExplanation: OllamaScoreResponse["explanation"] | undefined,
+  sarcasmDetected = false
 ): ExplanationJson {
   const defaultBreakdown = [
     `Constructiveness ${Math.round(ruleEngine.constructiveness)}/100`,
@@ -1090,12 +1181,16 @@ function buildExplanation(
             ruleEngine.evidencePresence < 55 ? "Evidence density is lower than ideal for a top score." : "There is still room for sharper proof points.",
           ],
     negativityVsToxicity:
-      aiExplanation?.negativity_vs_toxicity?.trim() ||
+      (sarcasmDetected
+        ? "This text is not just critical; it uses sarcastic mock praise and ridicule aimed at a player, so toxicity was raised above a pure negativity read."
+        : aiExplanation?.negativity_vs_toxicity?.trim()) ||
       (model.negativityScore > model.toxicityScore
         ? "The system detected critical or frustrated language, but that is not automatically treated as toxicity."
         : "The system saw negative language that overlaps with abusive phrasing, so toxicity was weighted more heavily."),
     penaltyDecision:
-      aiExplanation?.penalty_decision?.trim() ||
+      (sarcasmDetected
+        ? "A toxicity penalty was applied because the passage relies on targeted ridicule and sarcastic belittling more than constructive cricket reasoning."
+        : aiExplanation?.penalty_decision?.trim()) ||
       (moderation.overrideApplied
         ? "A reduced toxicity penalty was used because the piece stayed constructive and evidence-led."
         : moderation.penaltyApplied
@@ -1105,6 +1200,46 @@ function buildExplanation(
       safeStringList(aiExplanation?.user_visible_breakdown, 5).length > 0
         ? safeStringList(aiExplanation?.user_visible_breakdown, 5)
         : defaultBreakdown,
+  };
+}
+
+function applyModerationGuardrails(
+  text: string,
+  model: ModelScores,
+  ruleEngine: Omit<RuleEngineResult, "toxicityPenaltyApplied" | "toxicityPenaltyOverride">
+) {
+  const sarcasm = detectSarcasticRidicule(text);
+
+  if (!sarcasm.sarcasticRidicule) {
+    return { model, ruleEngine, sarcasmDetected: false };
+  }
+
+  const toxicityFloor =
+    sarcasm.ridiculeHits >= 3 || (sarcasm.mockPraiseHits >= 2 && sarcasm.lowEvidenceAttack)
+      ? 58
+      : 42;
+  const negativityFloor = sarcasm.lowEvidenceAttack ? 72 : 62;
+
+  return {
+    sarcasmDetected: true,
+    model: {
+      ...model,
+      negativityScore: Math.max(model.negativityScore, negativityFloor),
+      toxicityScore: Math.max(model.toxicityScore, toxicityFloor),
+    },
+    ruleEngine: {
+      ...ruleEngine,
+      constructiveness: sarcasm.lowEvidenceAttack
+        ? Math.min(ruleEngine.constructiveness, 35)
+        : Math.min(ruleEngine.constructiveness, 48),
+      evidencePresence: sarcasm.lowEvidenceAttack
+        ? Math.min(ruleEngine.evidencePresence, 28)
+        : Math.min(ruleEngine.evidencePresence, 40),
+      counterAcknowledge: Math.min(ruleEngine.counterAcknowledge, 20),
+      argumentLogic: sarcasm.lowEvidenceAttack
+        ? Math.min(ruleEngine.argumentLogic, 30)
+        : Math.min(ruleEngine.argumentLogic, 42),
+    },
   };
 }
 
@@ -1217,6 +1352,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     completeness: clampScore(Math.max(r.completeness || 0, pp.completeness), Math.max(fallback.completeness, pp.completeness)),
     argumentLogic: clampScore(r.argument_logic, fallback.argument_logic),
   };
+  const guarded = applyModerationGuardrails(text, modelScores, ruleEngineBase);
 
   const overallFactAccuracy = computeOverallFactAccuracy(
     statMetrics,
@@ -1224,10 +1360,10 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     clampScore(r.stat_accuracy, statMetrics.statAccuracy)
   );
   const computed = computeBQS(
-    modelScores,
-    ruleEngineBase,
+    guarded.model,
+    guarded.ruleEngine,
     overallFactAccuracy,
-    modelScores.archetypeLabel
+    guarded.model.archetypeLabel
   );
   const moderation = {
     penaltyApplied:
@@ -1239,11 +1375,32 @@ export async function runScoringPipeline(input: string | { title?: string; conte
         ? r.toxicity_penalty_override
         : computed.moderation.overrideApplied,
   };
-  const bqs = clampScore(r.final_bqs, computed.bqs);
-  const writerDNASignal = normaliseWriterDNASignal(r.writer_dna, modelScores.archetypeLabel);
+  const bqs = guarded.sarcasmDetected
+    ? computed.bqs
+    : clampScore(r.final_bqs, computed.bqs);
+  const writerDNASignal = normaliseWriterDNASignal(r.writer_dna, guarded.model.archetypeLabel);
 
   const paragraphScores = normaliseParagraphScores(r.paragraph_scores, paragraphs, fallback);
-  const explanation = buildExplanation(modelScores, ruleEngineBase, moderation, r.explanation);
+  const guardedParagraphScores = guarded.sarcasmDetected
+    ? paragraphScores.map((paragraph) => ({
+        ...paragraph,
+        negativity: Math.max(paragraph.negativity, guarded.model.negativityScore),
+        toxicity: Math.max(paragraph.toxicity, Math.min(guarded.model.toxicityScore, 70)),
+        constructiveness: Math.min(paragraph.constructiveness, guarded.ruleEngine.constructiveness),
+        evidence: Math.min(paragraph.evidence, guarded.ruleEngine.evidencePresence),
+        note:
+          paragraph.note.includes("sarcastic") || paragraph.note.includes("ridicule")
+            ? paragraph.note
+            : "Paragraph uses sarcastic ridicule aimed at a player, so toxicity was raised above a simple negativity read.",
+      }))
+    : paragraphScores;
+  const explanation = buildExplanation(
+    guarded.model,
+    guarded.ruleEngine,
+    moderation,
+    r.explanation,
+    guarded.sarcasmDetected
+  );
   const finalStatsVerified = statMetrics.source === "live" ? statMetrics.statsVerified : 0;
   const finalStatAccuracy = overallFactAccuracy;
   const factCheck = buildPersistedFactCheckReport(statMetrics, webFactCheck, finalStatAccuracy);
@@ -1259,25 +1416,25 @@ export async function runScoringPipeline(input: string | { title?: string; conte
       avgSentenceLength: pp.avgSentenceLength,
       completeness: r.completeness,
     },
-    modelScores,
+    modelScores: guarded.model,
     nerResult: {
       entities: [],
       statsFound: statMetrics.claims,
-      cricketDepth: ruleEngineBase.infoDensity,
+      cricketDepth: guarded.ruleEngine.infoDensity,
     },
     ruleEngine: {
-      ...ruleEngineBase,
+      ...guarded.ruleEngine,
       toxicityPenaltyApplied: moderation.penaltyApplied,
       toxicityPenaltyOverride: moderation.overrideApplied,
     },
     writerDNASignal,
-    paragraphScores,
+    paragraphScores: guardedParagraphScores,
     explanation,
     statsVerified: finalStatsVerified,
     statAccuracy: finalStatAccuracy,
     factCheck,
     processingTimeMs: Date.now() - started,
-    scoreVersion: aiResult ? "qwen3.5-v3-hybrid-factcheck" : "heuristic-fallback-v1",
+    scoreVersion: aiResult ? "qwen3.5-v4-sarcasm-guardrail" : "heuristic-fallback-v1",
   };
 }
 
