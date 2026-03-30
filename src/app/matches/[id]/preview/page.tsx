@@ -2,38 +2,31 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { ArrowLeft, Mic, PenSquare, Radio } from "lucide-react";
 import { getMatchInfo, getMatchSquad } from "@/lib/cricket-api";
+import { getMatchCoverage } from "@/lib/match-coverage";
 import { buildMatchPreviewIntel } from "@/lib/match-intelligence";
-import { prisma } from "@/lib/db";
 
 type PageProps = {
   params: Promise<{ id: string }>;
 };
+
+export const runtime = "nodejs";
+export const revalidate = 60;
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params;
   const match = await getMatchInfo(id);
   return {
     title: match ? `${match.name} Preview | CricGeek` : "Match Preview | CricGeek",
-    description: match ? `Preview, talking points, and linked coverage for ${match.name}` : "Cricket match preview",
+    description: match ? `Preview, talking points, and linked coverage for ${match.name}` : "Cricket match preview and tactical briefing",
   };
 }
 
 export default async function MatchPreviewPage({ params }: PageProps) {
   const { id } = await params;
-  const [match, squads, commentarySession, blogs] = await Promise.all([
+  const [match, squads, coverage] = await Promise.all([
     getMatchInfo(id),
     getMatchSquad(id),
-    prisma.liveCommentarySession.findFirst({
-      where: { matchId: id, status: { in: ["scheduled", "live", "paused"] } },
-      orderBy: { createdAt: "desc" },
-      select: { id: true, status: true },
-    }),
-    prisma.blog.findMany({
-      where: { matchTag: id, status: "approved" },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-      select: { id: true, title: true, slug: true },
-    }),
+    getMatchCoverage(id, true),
   ]);
 
   if (!match) {
@@ -46,6 +39,7 @@ export default async function MatchPreviewPage({ params }: PageProps) {
   }
 
   const intel = await buildMatchPreviewIntel(match, squads);
+  const { commentarySession, blogs, coverageAvailable } = coverage;
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
@@ -138,7 +132,11 @@ export default async function MatchPreviewPage({ params }: PageProps) {
           <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
             <h2 className="text-sm font-bold text-white">Linked Coverage</h2>
             <div className="mt-3 space-y-2">
-              {blogs.length > 0 ? blogs.map((blog) => (
+              {!coverageAvailable ? (
+                <p className="text-sm text-gray-400">
+                  Linked coverage is temporarily unavailable. Match preview insights are still live.
+                </p>
+              ) : blogs.length > 0 ? blogs.map((blog) => (
                 <Link key={blog.id} href={`/blog/${blog.slug}`} className="block text-sm text-blue-300 hover:text-blue-200">
                   {blog.title}
                 </Link>

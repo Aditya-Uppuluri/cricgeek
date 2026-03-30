@@ -46,6 +46,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 *.db
+/*.sql
 
 # Python virtual environments
 ai_service/venv/

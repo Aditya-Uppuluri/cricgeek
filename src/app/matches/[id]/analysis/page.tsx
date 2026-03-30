@@ -7,38 +7,31 @@ import BowlingLeadersTable from "@/components/matches/BowlingLeadersTable";
 import InningsSummaryGrid from "@/components/matches/InningsSummaryGrid";
 import PostMatchSignals from "@/components/matches/PostMatchSignals";
 import { getMatchInfo, getMatchScorecard } from "@/lib/cricket-api";
+import { getMatchCoverage } from "@/lib/match-coverage";
 import { buildPostMatchIntel } from "@/lib/match-intelligence";
-import { prisma } from "@/lib/db";
 
 type PageProps = {
   params: Promise<{ id: string }>;
 };
+
+export const runtime = "nodejs";
+export const revalidate = 60;
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params;
   const match = await getMatchInfo(id);
   return {
     title: match ? `${match.name} Analysis | CricGeek` : "Post-Match Analysis | CricGeek",
-    description: match ? `Post-match analytics and EDA cards for ${match.name}` : "Cricket post-match analysis",
+    description: match ? `Post-match EDA report, scorecard analytics, and linked coverage for ${match.name}` : "Cricket post-match analysis",
   };
 }
 
 export default async function MatchAnalysisPage({ params }: PageProps) {
   const { id } = await params;
-  const [match, scorecards, commentarySession, blogs] = await Promise.all([
+  const [match, scorecards, coverage] = await Promise.all([
     getMatchInfo(id),
     getMatchScorecard(id),
-    prisma.liveCommentarySession.findFirst({
-      where: { matchId: id },
-      orderBy: { updatedAt: "desc" },
-      select: { id: true, status: true },
-    }),
-    prisma.blog.findMany({
-      where: { matchTag: id, status: "approved" },
-      orderBy: { createdAt: "desc" },
-      take: 3,
-      select: { id: true, title: true, slug: true },
-    }),
+    getMatchCoverage(id),
   ]);
 
   if (!match) {
@@ -52,6 +45,7 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
 
   const intel = await buildPostMatchIntel(match, scorecards);
   const isReportReady = match.matchEnded && intel.inningsSummaries.length > 0;
+  const { commentarySession, blogs, coverageAvailable } = coverage;
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
@@ -154,7 +148,11 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
           <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
             <h2 className="text-lg font-bold text-white">Coverage Links</h2>
             <div className="mt-4 space-y-3 text-sm">
-              {commentarySession ? (
+              {!coverageAvailable ? (
+                <p className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3 text-gray-400">
+                  Linked commentary and match blogs are temporarily unavailable, but the EDA report is still live.
+                </p>
+              ) : commentarySession ? (
                 <Link
                   href={`/commentary/${commentarySession.id}`}
                   className="flex items-center gap-2 rounded-lg border border-gray-800 bg-cg-dark px-4 py-3 text-cg-green hover:bg-white/5"
@@ -168,7 +166,7 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
                 </p>
               )}
 
-              {blogs.length > 0 ? blogs.map((blog) => (
+              {!coverageAvailable ? null : blogs.length > 0 ? blogs.map((blog) => (
                 <Link
                   key={blog.id}
                   href={`/blog/${blog.slug}`}
