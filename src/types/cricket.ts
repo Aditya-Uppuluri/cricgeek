@@ -141,6 +141,57 @@ export interface PostMatchEdaCard {
   tone?: "neutral" | "good" | "warning";
 }
 
+export interface PostMatchSignal {
+  id: string;
+  label: string;
+  value: string;
+  insight: string;
+  tone?: "neutral" | "good" | "warning";
+}
+
+export interface PostMatchInningsSummary {
+  inning: string;
+  totalRuns: number;
+  totalWickets: number;
+  totalOvers: number;
+  runRate: number;
+  extras: number;
+  extrasPct: number;
+  boundaryRuns: number;
+  boundaryPct: number;
+  topScorerName: string;
+  topScorerRuns: number;
+  topScorerStrikeRate: number;
+  topScorerPct: number;
+  supportRuns: number;
+  supportPct: number;
+  lowerOrderRuns: number;
+  lowerOrderPct: number;
+}
+
+export interface PostMatchBattingLeader {
+  name: string;
+  inning: string;
+  runs: number;
+  balls: number;
+  strikeRate: number;
+  fours: number;
+  sixes: number;
+  boundaryPct: number;
+  sharePct: number;
+}
+
+export interface PostMatchBowlingLeader {
+  name: string;
+  inning: string;
+  wickets: number;
+  overs: number;
+  maidens: number;
+  runsConceded: number;
+  economy: number;
+  ballsPerWicket: number | null;
+}
+
 export interface PostMatchIntel {
   headline: string;
   summary: string;
@@ -148,6 +199,11 @@ export interface PostMatchIntel {
   tacticalTakeaways: string[];
   standoutPerformers: string[];
   edaCards: PostMatchEdaCard[];
+  matchSignals: PostMatchSignal[];
+  inningsSummaries: PostMatchInningsSummary[];
+  battingLeaders: PostMatchBattingLeader[];
+  bowlingLeaders: PostMatchBowlingLeader[];
+  reportNotes: string[];
 }
 
 export interface VenueInfo {

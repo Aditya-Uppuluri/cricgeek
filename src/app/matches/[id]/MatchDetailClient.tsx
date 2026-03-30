@@ -144,8 +144,9 @@ export default function MatchDetailClient({
                   Post-Match Analysis
                 </h3>
                 <p className="text-gray-400 text-sm">
-                  Post-match analysis now includes scorecard-derived EDA cards,
-                  standout performers, turning points, and tactical takeaways.
+                  Post-match analysis now includes innings fingerprints, scorecard-derived
+                  EDA cards, batting and bowling impact tables, match signals, and
+                  tactical takeaways.
                 </p>
                 <Link
                   href={`/matches/${match.id}/analysis`}

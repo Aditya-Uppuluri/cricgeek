@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
+import { beautifyCommentaryText } from "@/lib/commentary-format";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 
@@ -43,7 +44,14 @@ export async function POST(request: Request) {
     }
 
     const result = await response.json();
-    return NextResponse.json(result);
+    const rawText = typeof result?.text === "string" ? result.text : "";
+    const beautifiedText = beautifyCommentaryText(rawText);
+
+    return NextResponse.json({
+      ...result,
+      rawText,
+      text: beautifiedText,
+    });
   } catch (error) {
     console.error("Transcription proxy error:", error);
     return NextResponse.json(

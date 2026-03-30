@@ -2,6 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Mic, MicOff, Send, Loader2, Pause, Play, StopCircle, Keyboard, Volume2 } from "lucide-react";
+import { beautifyCommentaryText } from "@/lib/commentary-format";
 
 interface Entry {
   id: string;
@@ -360,7 +361,7 @@ export default function ModeratorDashboard({
       }
 
       const data = await res.json();
-      setTranscribedText(data.text || "");
+      setTranscribedText(data.text || beautifyCommentaryText(data.rawText || ""));
     } catch (err) {
       console.error("Transcription failed:", err);
       setError(err instanceof Error ? err.message : "Transcription failed");
@@ -370,12 +371,13 @@ export default function ModeratorDashboard({
   };
 
   const postEntry = async () => {
-    const text = transcribedText.trim();
+    const text = beautifyCommentaryText(transcribedText);
     if (!text) return;
 
     setIsPosting(true);
     setError(null);
     try {
+      setTranscribedText(text);
       const res = await fetch(`/api/commentary/${sessionId}/entries`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -569,6 +571,9 @@ export default function ModeratorDashboard({
               rows={3}
               className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 resize-none focus:border-cg-green focus:outline-none transition"
             />
+            <p className="mt-2 text-xs text-gray-500">
+              Commentary is auto-polished for readability before posting.
+            </p>
           </div>
 
           {/* Error message */}
