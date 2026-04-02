@@ -72,7 +72,8 @@ export async function POST(request: Request, { params }: RouteParams) {
     const source = body.source;
     const matchContext = await getCommentarySessionMatchContext(sessionId);
     const correctedText = correctPlayerNamesInCommentary(rawText, matchContext.playerNames);
-    const text = await polishCommentaryForSubmission(correctedText);
+    const polishedText = await polishCommentaryForSubmission(correctedText);
+    const text = correctPlayerNamesInCommentary(polishedText, matchContext.playerNames);
 
     if (!text) {
       return NextResponse.json(
