@@ -2,10 +2,32 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
+import { hasDeepgramConfigured, transcribeWithDeepgram } from "@/lib/deepgram";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 const isLocalAiService =
   AI_SERVICE_URL.includes("127.0.0.1") || AI_SERVICE_URL.includes("localhost");
+
+async function transcribeWithLegacyService(audioFile: File) {
+  const proxyForm = new FormData();
+  proxyForm.append("audio", audioFile);
+
+  const response = await fetch(`${AI_SERVICE_URL}/transcribe`, {
+    method: "POST",
+    body: proxyForm,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(errorBody || "Legacy transcription service failed");
+  }
+
+  return response.json();
+}
+
+type TranscriptionPayload = Record<string, unknown> & {
+  text?: string;
+};
 
 // POST /api/commentary/transcribe — proxy audio to Python Whisper service
 export async function POST(request: Request) {
@@ -27,40 +49,46 @@ export async function POST(request: Request) {
       );
     }
 
-    if (process.env.NODE_ENV === "production" && isLocalAiService) {
+    const deepgramConfigured = hasDeepgramConfigured();
+    const canUseLegacyService =
+      Boolean(process.env.AI_SERVICE_URL) &&
+      !(process.env.NODE_ENV === "production" && isLocalAiService);
+
+    if (!deepgramConfigured && !canUseLegacyService) {
       return NextResponse.json(
         {
-          error: "Transcription service is not configured for production",
+          error: "No transcription provider is configured",
           code: "TRANSCRIPTION_SERVICE_UNAVAILABLE",
         },
         { status: 503 }
       );
     }
 
-    // Forward to the Python AI service
-    const proxyForm = new FormData();
-    proxyForm.append("audio", audioFile);
+    let result: TranscriptionPayload;
+    let provider = "legacy";
 
-    const response = await fetch(`${AI_SERVICE_URL}/transcribe`, {
-      method: "POST",
-      body: proxyForm,
-    });
+    try {
+      if (deepgramConfigured) {
+        result = await transcribeWithDeepgram(audioFile);
+        provider = "deepgram";
+      } else {
+        result = await transcribeWithLegacyService(audioFile);
+      }
+    } catch (error) {
+      if (!canUseLegacyService || !deepgramConfigured) {
+        throw error;
+      }
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      console.error("AI service transcription error:", errorBody);
-      return NextResponse.json(
-        { error: "Transcription failed", detail: errorBody },
-        { status: response.status }
-      );
+      console.error("Deepgram transcription error, falling back to legacy service:", error);
+      result = await transcribeWithLegacyService(audioFile);
     }
 
-    const result = await response.json();
-    const rawText = typeof result?.text === "string" ? result.text : "";
+    const rawText = typeof result.text === "string" ? result.text : "";
     const beautifiedText = await polishCommentaryForSubmission(rawText);
 
     return NextResponse.json({
       ...result,
+      provider,
       rawText,
       text: beautifiedText,
     });

@@ -23,6 +23,12 @@ export async function GET() {
     authUrlConfigured: Boolean(authUrl || trustHost),
     sportMonksConfigured: Boolean(process.env.SPORTMONKS_API_TOKEN),
     matchDataConfigured,
+    deepgramConfigured: Boolean(process.env.DEEPGRAM_API_KEY),
+    transcriptionProvider: process.env.DEEPGRAM_API_KEY
+      ? "deepgram"
+      : process.env.AI_SERVICE_URL
+        ? "legacy"
+        : "none",
     searchConfigured: Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY),
     searchProvider: process.env.SERPER_API_KEY ? "serper" : process.env.TAVILY_API_KEY ? "tavily" : "none",
     ollamaConfigured: Boolean(ollamaUrl),
