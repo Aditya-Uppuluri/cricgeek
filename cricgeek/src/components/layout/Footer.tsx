@@ -62,7 +62,7 @@ export default function Footer() {
             © {new Date().getFullYear()} CricGeek. All rights reserved.
           </p>
           <p className="text-gray-600 text-xs">
-            Cricket data provided by CricAPI. Not affiliated with ICC or BCCI.
+            Cricket data provided by SportMonks. Not affiliated with ICC or BCCI.
           </p>
         </div>
       </div>

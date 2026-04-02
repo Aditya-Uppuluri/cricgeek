@@ -1,8 +1,6 @@
 import {
+  getMatchDetailBundle,
   getMatchInfo,
-  getMatchScorecard,
-  getMatchCommentary,
-  getMatchSquad,
 } from "@/lib/cricket-api";
 import { getSMFixture, isSportMonksConfigured } from "@/lib/sportmonks";
 import MatchDetailClient from "./MatchDetailClient";
@@ -12,6 +10,7 @@ export const revalidate = 20;
 
 type PageProps = {
   params: Promise<{ id: string }>;
+  searchParams?: Promise<{ tab?: string }>;
 };
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
@@ -25,18 +24,17 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function MatchDetailPage({ params }: PageProps) {
+export default async function MatchDetailPage({ params, searchParams }: PageProps) {
   const { id } = await params;
+  const resolvedSearchParams = await searchParams;
+  const requestedTab = resolvedSearchParams?.tab;
+  const initialTab =
+    requestedTab === "commentary" || requestedTab === "squads" || requestedTab === "analysis"
+      ? requestedTab
+      : "scorecard";
 
-  // SportMonks provides match data directly; supplement with CricAPI for scorecard/commentary
-  const [smMatch, scorecard, commentary, squads] = await Promise.all([
-    isSportMonksConfigured() ? getSMFixture(id) : null,
-    getMatchScorecard(id),
-    getMatchCommentary(id),
-    getMatchSquad(id),
-  ]);
-
-  const match = smMatch ?? await getMatchInfo(id);
+  const bundle = await getMatchDetailBundle(id);
+  const match = bundle.match ?? await getMatchInfo(id);
 
 
   if (!match) {
@@ -53,9 +51,11 @@ export default async function MatchDetailPage({ params }: PageProps) {
   return (
     <MatchDetailClient
       match={match}
-      scorecard={scorecard}
-      commentary={commentary}
-      squads={squads}
+      scorecard={bundle.scorecard}
+      commentary={bundle.commentary}
+      squads={bundle.squads}
+      initialTab={initialTab}
+      source={bundle.source}
     />
   );
 }

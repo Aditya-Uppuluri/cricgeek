@@ -4,12 +4,18 @@
  * LiveScoresTicker
  *
  * Horizontally scrolling marquee of live scores on the matches page.
- * Uses the shared useLiveMatches query — no duplicate polling.
+ * Polls /api/livescores every 30 seconds client-side.
  * Shows only live matches: team codes + score in a compact pill.
  */
 
+import { useEffect, useState, useCallback } from "react";
 import type { Match } from "@/types/cricket";
-import { useLiveMatches } from "@/hooks/useLiveMatches";
+
+interface TickerItem {
+  id: string;
+  label: string;
+  isLive: boolean;
+}
 
 function buildLabel(match: Match): string {
   const t = match.teamInfo ?? [];
@@ -27,24 +33,46 @@ function buildLabel(match: Match): string {
 }
 
 export default function LiveScoresTicker() {
-  const { data } = useLiveMatches();
+  const [items, setItems] = useState<TickerItem[]>([]);
+  const [lastUpdated, setLastUpdated] = useState<string>("");
+  const [source, setSource] = useState<string>("");
 
-  const liveMatches = (data?.matches ?? []).filter(
-    (m) => m.matchStarted && !m.matchEnded
-  );
+  const fetchScores = useCallback(async () => {
+    try {
+      const res = await fetch("/api/livescores", { cache: "no-store" });
+      if (!res.ok) return;
+      const json = await res.json();
+      const matches: Match[] = json.matches ?? [];
 
-  if (liveMatches.length === 0) return null;
+      const tickerItems = matches
+        .filter((m) => m.matchStarted && !m.matchEnded)
+        .map((m) => ({
+          id: m.id,
+          label: buildLabel(m),
+          isLive: true,
+        }));
 
-  const source = data?.source ?? "";
-  const lastUpdated = data?.updatedAt
-    ? new Date(data.updatedAt).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" })
-    : "";
+      setItems(tickerItems);
+      setLastUpdated(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }));
+      setSource(json.source ?? "");
+    } catch {
+      // silently fail — don't break the page
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchScores();
+    const interval = setInterval(fetchScores, 30_000);
+    return () => clearInterval(interval);
+  }, [fetchScores]);
+
+  if (items.length === 0) return null;
 
   return (
     <div className="bg-cg-dark-2 border-y border-gray-800 overflow-hidden">
       <div className="flex items-center">
         {/* LIVE label */}
-        <div className="shrink-0 flex items-center gap-2 px-4 py-2 bg-red-500/10 border-r border-gray-800 h-full">
+        <div className="flex-shrink-0 flex items-center gap-2 px-4 py-2 bg-red-500/10 border-r border-gray-800 h-full">
           <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />
           <span className="text-red-400 text-xs font-bold tracking-widest">LIVE</span>
         </div>
@@ -53,16 +81,16 @@ export default function LiveScoresTicker() {
         <div className="relative flex-1 overflow-hidden">
           <div
             className="flex gap-8 whitespace-nowrap py-2 px-4"
-            style={{ animation: `ticker ${Math.max(liveMatches.length * 8, 20)}s linear infinite` }}
+            style={{ animation: `ticker ${Math.max(items.length * 8, 20)}s linear infinite` }}
           >
             {/* Duplicate items for seamless loop */}
-            {[...liveMatches, ...liveMatches].map((match, i) => (
+            {[...items, ...items].map((item, i) => (
               <span
-                key={`${match.id}-${i}`}
+                key={`${item.id}-${i}`}
                 className="inline-flex items-center gap-2 text-xs text-gray-300 font-mono"
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-cg-green" />
-                {buildLabel(match)}
+                {item.label}
               </span>
             ))}
           </div>
@@ -70,8 +98,9 @@ export default function LiveScoresTicker() {
 
         {/* Updated time */}
         {lastUpdated && (
-          <div className="shrink-0 px-3 py-2 text-[10px] text-gray-600 border-l border-gray-800 hidden sm:block">
-            {source === "sportmonks" ? "SportMonks" : "Live"} · {lastUpdated}
+          <div className="flex-shrink-0 px-3 py-2 text-[10px] text-gray-600 border-l border-gray-800 hidden sm:block">
+            {source === "sportmonks" ? "SportMonks" : "Live"}{" "}
+            · {lastUpdated}
           </div>
         )}
       </div>
