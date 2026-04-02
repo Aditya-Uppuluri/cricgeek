@@ -122,6 +122,7 @@ export default function ModeratorDashboard({
   const [overText, setOverText] = useState("");
   const [inputMode, setInputMode] = useState<"voice" | "typed">("voice");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [audioLevel, setAudioLevel] = useState(0);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -177,6 +178,7 @@ export default function ModeratorDashboard({
 
   const startRecording = useCallback(async () => {
     setError(null);
+    setNotice(null);
     finalTranscriptRef.current = "";
     interimTranscriptRef.current = "";
     lastRecordedBlobRef.current = null;
@@ -366,7 +368,13 @@ export default function ModeratorDashboard({
 
       if (!res.ok) {
         const err = await res.json();
-        throw new Error(err.error || "Transcription failed");
+        const error = new Error(err.error || "Transcription failed") as Error & {
+          code?: string;
+        };
+        if (typeof err?.code === "string") {
+          error.code = err.code;
+        }
+        throw error;
       }
 
       const data = await res.json();
@@ -380,6 +388,9 @@ export default function ModeratorDashboard({
       const fallbackText = finalizeCommentaryText(options?.fallbackText || transcribedText);
       if (fallbackText) {
         setTranscribedText(fallbackText);
+        setNotice("Using the live browser transcript. Final grammar cleanup will still run when you post.");
+        setError(null);
+        return;
       }
       setError(err instanceof Error ? err.message : "Transcription failed");
     } finally {
@@ -393,6 +404,7 @@ export default function ModeratorDashboard({
 
     setIsPosting(true);
     setError(null);
+    setNotice(null);
     try {
       setTranscribedText(text);
       const res = await fetch(`/api/commentary/${sessionId}/entries`, {
@@ -592,6 +604,12 @@ export default function ModeratorDashboard({
               Commentary is cleaned for grammar, capitalization, and punctuation before posting.
             </p>
           </div>
+
+          {notice && (
+            <div className="px-3 py-2 rounded-lg bg-cg-green/10 border border-cg-green/20 text-cg-green text-sm">
+              {notice}
+            </div>
+          )}
 
           {/* Error message */}
           {error && (

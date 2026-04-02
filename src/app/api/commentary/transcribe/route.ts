@@ -4,6 +4,8 @@ import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
+const isLocalAiService =
+  AI_SERVICE_URL.includes("127.0.0.1") || AI_SERVICE_URL.includes("localhost");
 
 // POST /api/commentary/transcribe — proxy audio to Python Whisper service
 export async function POST(request: Request) {
@@ -22,6 +24,16 @@ export async function POST(request: Request) {
       return NextResponse.json(
         { error: "No audio file provided" },
         { status: 400 }
+      );
+    }
+
+    if (process.env.NODE_ENV === "production" && isLocalAiService) {
+      return NextResponse.json(
+        {
+          error: "Transcription service is not configured for production",
+          code: "TRANSCRIPTION_SERVICE_UNAVAILABLE",
+        },
+        { status: 503 }
       );
     }
 
@@ -55,7 +67,10 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error("Transcription proxy error:", error);
     return NextResponse.json(
-      { error: "Failed to reach transcription service" },
+      {
+        error: "Failed to reach transcription service",
+        code: "TRANSCRIPTION_SERVICE_UNAVAILABLE",
+      },
       { status: 502 }
     );
   }

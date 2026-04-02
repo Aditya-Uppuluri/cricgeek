@@ -54,3 +54,4 @@ ai_service/venv/
 # Python cache / bytecode
 __pycache__/
 *.py[cod]
+.env*.local
