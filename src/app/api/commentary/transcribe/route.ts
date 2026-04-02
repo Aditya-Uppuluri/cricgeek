@@ -3,6 +3,8 @@ import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
 import { hasDeepgramConfigured, transcribeWithDeepgram } from "@/lib/deepgram";
+import { prisma } from "@/lib/db";
+import { getMatchInfo, getMatchSquad } from "@/lib/cricket-api";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 const isLocalAiService =
@@ -29,6 +31,62 @@ type TranscriptionPayload = Record<string, unknown> & {
   text?: string;
 };
 
+async function buildMatchKeyterms(sessionId: string | null) {
+  if (!sessionId) {
+    return [];
+  }
+
+  const commentarySession = await prisma.liveCommentarySession.findUnique({
+    where: { id: sessionId },
+    select: {
+      matchId: true,
+      matchName: true,
+      matchType: true,
+    },
+  });
+
+  if (!commentarySession) {
+    return [];
+  }
+
+  const [match, squads] = await Promise.all([
+    getMatchInfo(commentarySession.matchId, { fresh: true }),
+    getMatchSquad(commentarySession.matchId, { fresh: true }),
+  ]);
+
+  const terms = new Set<string>();
+
+  const addTerm = (value?: string | null) => {
+    const term = value?.trim();
+    if (term) {
+      terms.add(term);
+    }
+  };
+
+  addTerm(commentarySession.matchName);
+  addTerm(commentarySession.matchType);
+
+  for (const team of match?.teams ?? []) {
+    addTerm(team);
+  }
+
+  for (const teamInfo of match?.teamInfo ?? []) {
+    addTerm(teamInfo.name);
+    addTerm(teamInfo.shortname);
+  }
+
+  for (const squad of squads ?? []) {
+    addTerm(squad.teamName);
+    addTerm(squad.shortname);
+
+    for (const player of squad.players) {
+      addTerm(player.name);
+    }
+  }
+
+  return [...terms];
+}
+
 // POST /api/commentary/transcribe — proxy audio to Python Whisper service
 export async function POST(request: Request) {
   const session = await auth();
@@ -41,6 +99,11 @@ export async function POST(request: Request) {
   try {
     const formData = await request.formData();
     const audioFile = formData.get("audio") as File | null;
+    const sessionIdValue = formData.get("sessionId");
+    const sessionId =
+      typeof sessionIdValue === "string" && sessionIdValue.trim().length > 0
+        ? sessionIdValue.trim()
+        : null;
 
     if (!audioFile) {
       return NextResponse.json(
@@ -66,10 +129,13 @@ export async function POST(request: Request) {
 
     let result: TranscriptionPayload;
     let provider = "legacy";
+    const dynamicKeyterms = await buildMatchKeyterms(sessionId);
 
     try {
       if (deepgramConfigured) {
-        result = await transcribeWithDeepgram(audioFile);
+        result = await transcribeWithDeepgram(audioFile, {
+          keyterms: dynamicKeyterms,
+        });
         provider = "deepgram";
       } else {
         result = await transcribeWithLegacyService(audioFile);

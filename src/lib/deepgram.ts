@@ -45,6 +45,10 @@ const CRICKET_KEYTERMS = [
   "yorker",
 ] as const;
 
+type DeepgramTranscriptionOptions = {
+  keyterms?: string[];
+};
+
 type DeepgramTranscriptResult = {
   provider: "deepgram";
   text: string;
@@ -98,7 +102,11 @@ function getConfidenceFromPayload(payload: unknown): number | null {
   return typeof confidence === "number" ? confidence : null;
 }
 
-function buildDeepgramUrl() {
+function normalizeKeyterms(keyterms: string[]) {
+  return [...new Set(keyterms.map((term) => term.trim()).filter(Boolean))].slice(0, 120);
+}
+
+function buildDeepgramUrl(options?: DeepgramTranscriptionOptions) {
   const params = new URLSearchParams({
     model: DEEPGRAM_MODEL,
     language: "en-US",
@@ -109,7 +117,12 @@ function buildDeepgramUrl() {
     numerals: "true",
   });
 
-  for (const keyterm of CRICKET_KEYTERMS) {
+  const mergedKeyterms = normalizeKeyterms([
+    ...CRICKET_KEYTERMS,
+    ...(options?.keyterms ?? []),
+  ]);
+
+  for (const keyterm of mergedKeyterms) {
     params.append("keyterm", keyterm);
   }
 
@@ -120,7 +133,10 @@ export function hasDeepgramConfigured() {
   return Boolean(process.env.DEEPGRAM_API_KEY);
 }
 
-export async function transcribeWithDeepgram(audioFile: File): Promise<DeepgramTranscriptResult> {
+export async function transcribeWithDeepgram(
+  audioFile: File,
+  options?: DeepgramTranscriptionOptions
+): Promise<DeepgramTranscriptResult> {
   const apiKey = process.env.DEEPGRAM_API_KEY?.trim();
 
   if (!apiKey) {
@@ -129,7 +145,7 @@ export async function transcribeWithDeepgram(audioFile: File): Promise<DeepgramT
 
   const audioBuffer = await audioFile.arrayBuffer();
   const contentType = audioFile.type || "audio/webm";
-  const response = await fetch(buildDeepgramUrl(), {
+  const response = await fetch(buildDeepgramUrl(options), {
     method: "POST",
     headers: {
       Authorization: `Token ${apiKey}`,

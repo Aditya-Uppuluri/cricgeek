@@ -360,6 +360,7 @@ export default function ModeratorDashboard({
       const formData = new FormData();
       const extension = recorderSupportRef.current?.extension || "webm";
       formData.append("audio", blob, `commentary.${extension}`);
+      formData.append("sessionId", sessionId);
 
       const res = await fetch("/api/commentary/transcribe", {
         method: "POST",
