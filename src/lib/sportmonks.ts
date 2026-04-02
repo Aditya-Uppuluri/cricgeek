@@ -14,7 +14,7 @@
  * doesn't need any changes.
  */
 
-import { BattingEntry, BowlingEntry, Match, Score, Scorecard, TeamInfo } from "@/types/cricket";
+import { BattingEntry, BowlingEntry, Commentary, Match, Player, Score, Scorecard, Squad, TeamInfo } from "@/types/cricket";
 
 const BASE_URL =
   process.env.SPORTMONKS_BASE_URL ||
@@ -93,6 +93,8 @@ export interface SMFixture {
   scorecard?: unknown;
   batting?: unknown;
   bowling?: unknown;
+  balls?: unknown;
+  lineup?: unknown;
   league?: SMLeague;
   venue?: SMVenue;
 }
@@ -103,12 +105,17 @@ interface SMResponse<T> {
   meta?: unknown;
 }
 
+interface SportMonksRequestOptions {
+  fresh?: boolean;
+  revalidateSeconds?: number;
+}
+
 // ── Fetch helper ─────────────────────────────────────────────────────
 
 async function smFetch<T>(
   path: string,
   params: Record<string, string> = {},
-  revalidateSeconds = 30
+  options: SportMonksRequestOptions = {}
 ): Promise<T | null> {
   if (!API_TOKEN) {
     return null; // Token not set — caller falls back to mock
@@ -120,7 +127,9 @@ async function smFetch<T>(
 
   try {
     const res = await fetch(url.toString(), {
-      next: { revalidate: revalidateSeconds },
+      ...(options.fresh
+        ? { cache: "no-store" as const }
+        : { next: { revalidate: options.revalidateSeconds ?? 30 } }),
     });
 
     if (!res.ok) {
@@ -154,10 +163,10 @@ function statusToState(fixture: SMFixture): {
 } {
   const s = fixture.status?.toLowerCase() ?? "";
 
-  if (fixture.live) return { matchStarted: true, matchEnded: false };
-  if (NS_STATUSES.has(s)) return { matchStarted: false, matchEnded: false };
   if (FINISHED_STATUSES.some((k) => s.includes(k)) || fixture.winner_team_id != null)
     return { matchStarted: true, matchEnded: true };
+  if (fixture.live) return { matchStarted: true, matchEnded: false };
+  if (NS_STATUSES.has(s)) return { matchStarted: false, matchEnded: false };
   return { matchStarted: true, matchEnded: false };
 }
 
@@ -179,6 +188,21 @@ function formatStartTime(isoString: string): string {
 function buildStatusLabel(fixture: SMFixture): string {
   const s = fixture.status?.toLowerCase() ?? "";
 
+  // Result
+  if (fixture.winner_team_id) {
+    const winner =
+      fixture.winner_team_id === fixture.localteam_id
+        ? fixture.localteam?.name
+        : fixture.winner_team_id === fixture.visitorteam_id
+          ? fixture.visitorteam?.name
+          : fixture.status;
+    return `${winner ?? "Match"} won`;
+  }
+  if (fixture.draw_noresult) return "No Result / Draw";
+  if (FINISHED_STATUSES.some((k) => s.includes(k))) {
+    return fixture.status || "Finished";
+  }
+
   // Live match — show innings status
   if (fixture.live) {
     return `LIVE · ${fixture.status || "In Progress"}`;
@@ -188,16 +212,6 @@ function buildStatusLabel(fixture: SMFixture): string {
   if (NS_STATUSES.has(s)) {
     return formatStartTime(fixture.starting_at);
   }
-
-  // Result
-  if (fixture.winner_team_id) {
-    const winner =
-      fixture.winner_team_id === fixture.localteam_id
-        ? fixture.localteam?.name
-        : fixture.visitorteam?.name;
-    return `${winner ?? "Home"} won`;
-  }
-  if (fixture.draw_noresult) return "No Result / Draw";
 
   // In progress but not yet marked live
   if (fixture.status && !NS_STATUSES.has(s)) return fixture.status;
@@ -290,6 +304,10 @@ function normaliseMatchType(raw: string | undefined | null): string {
 // ── Public API ────────────────────────────────────────────────────────
 
 const INCLUDES = "localteam,visitorteam,runs,league,venue";
+const DETAIL_INCLUDES = `${INCLUDES}`;
+const SQUAD_INCLUDES = "localteam,visitorteam,lineup";
+const SCORECARD_INCLUDES = "localteam,visitorteam,runs,batting,bowling,lineup";
+const COMMENTARY_INCLUDES = "balls";
 
 /**
  * Fetch all live fixtures from SportMonks.
@@ -298,7 +316,7 @@ const INCLUDES = "localteam,visitorteam,runs,league,venue";
 export async function getSMLivescores(): Promise<Match[] | null> {
   const data = await smFetch<SMFixture[]>("/livescores", {
     include: INCLUDES,
-  }, 20);
+  }, { revalidateSeconds: 20 });
 
   if (!data) return null;
   return data.map(normaliseFixture);
@@ -307,10 +325,10 @@ export async function getSMLivescores(): Promise<Match[] | null> {
 /**
  * Fetch a single fixture by ID with full includes.
  */
-export async function getSMFixture(id: string): Promise<Match | null> {
+export async function getSMFixture(id: string, options: SportMonksRequestOptions = {}): Promise<Match | null> {
   const data = await smFetch<SMFixture>(`/fixtures/${id}`, {
-    include: `${INCLUDES},scorecard`,
-  }, 20);
+    include: DETAIL_INCLUDES,
+  }, { revalidateSeconds: 20, ...options });
 
   if (!data) return null;
   return normaliseFixture(data);
@@ -345,29 +363,136 @@ function normaliseBowlingRow(row: Record<string, unknown>): BowlingEntry {
   };
 }
 
-function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
-  const inningsSource =
-    (Array.isArray(fixture.scorecards) ? fixture.scorecards : null) ||
-    (Array.isArray(fixture.scorecard) ? fixture.scorecard : null);
+function normaliseScoreboardLabel(value: unknown): string {
+  return String(value ?? "").trim().toUpperCase();
+}
 
-  if (!inningsSource) {
-    return null;
+function scoreboardsInOrder(labels: Iterable<string>): string[] {
+  return [...new Set([...labels].filter(Boolean))].sort((left, right) => {
+    const leftNum = Number.parseInt(left.replace(/[^0-9]/g, ""), 10);
+    const rightNum = Number.parseInt(right.replace(/[^0-9]/g, ""), 10);
+
+    if (Number.isNaN(leftNum) && Number.isNaN(rightNum)) return left.localeCompare(right);
+    if (Number.isNaN(leftNum)) return 1;
+    if (Number.isNaN(rightNum)) return -1;
+    return leftNum - rightNum;
+  });
+}
+
+function buildPlayerNameIndex(lineup: unknown, localTeam?: SMTeam, visitorTeam?: SMTeam) {
+  const index = new Map<string, string>();
+  const teamPlayers = new Map<number, Player[]>();
+
+  if (!Array.isArray(lineup)) {
+    return { playerNameById: index, teamPlayers };
   }
 
-  const parsed = inningsSource
-    .map((inning, index) => {
-      const raw = inning as Record<string, unknown>;
-      const battingRows = Array.isArray(raw.batting) ? raw.batting : [];
-      const bowlingRows = Array.isArray(raw.bowling) ? raw.bowling : [];
+  for (const row of lineup) {
+    const player = row as Record<string, unknown>;
+    const id = String(player.id ?? "");
+    const fullName =
+      typeof player.fullname === "string"
+        ? player.fullname
+        : [player.firstname, player.lastname].filter((value) => typeof value === "string" && value.trim()).join(" ");
+
+    if (id && fullName) {
+      index.set(id, fullName);
+    }
+
+    const lineupMeta = (player.lineup as Record<string, unknown> | undefined) ?? {};
+    const teamId = Number(lineupMeta.team_id ?? 0);
+    if (!teamId) continue;
+
+    const playerEntry: Player = {
+      id: id || String(player.id ?? "unknown"),
+      name: fullName || "Unknown Player",
+      role: typeof (player.position as Record<string, unknown> | undefined)?.name === "string"
+        ? String((player.position as Record<string, unknown>).name)
+        : undefined,
+      battingStyle: typeof player.battingstyle === "string" ? player.battingstyle : undefined,
+      bowlingStyle: typeof player.bowlingstyle === "string" ? player.bowlingstyle : undefined,
+      playerImg: typeof player.image_path === "string" ? player.image_path : undefined,
+    };
+
+    if (!teamPlayers.has(teamId)) teamPlayers.set(teamId, []);
+    teamPlayers.get(teamId)!.push(playerEntry);
+  }
+
+  if (localTeam && !teamPlayers.has(localTeam.id)) {
+    teamPlayers.set(localTeam.id, []);
+  }
+  if (visitorTeam && !teamPlayers.has(visitorTeam.id)) {
+    teamPlayers.set(visitorTeam.id, []);
+  }
+
+  return { playerNameById: index, teamPlayers };
+}
+
+function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
+  const battingRows = Array.isArray(fixture.batting) ? fixture.batting : [];
+  const bowlingRows = Array.isArray(fixture.bowling) ? fixture.bowling : [];
+  const runs = Array.isArray(fixture.runs) ? fixture.runs : [];
+  const { playerNameById } = buildPlayerNameIndex(fixture.lineup, fixture.localteam, fixture.visitorteam);
+
+  const scoreboardLabels = scoreboardsInOrder([
+    ...battingRows.map((row) => normaliseScoreboardLabel((row as Record<string, unknown>).scoreboard)),
+    ...bowlingRows.map((row) => normaliseScoreboardLabel((row as Record<string, unknown>).scoreboard)),
+  ]);
+
+  const parsed = scoreboardLabels
+    .map((scoreboardLabel, index) => {
+      const battingSourceRow = battingRows.find(
+        (row) => normaliseScoreboardLabel((row as Record<string, unknown>).scoreboard) === scoreboardLabel
+      ) as Record<string, unknown> | undefined;
+      const battingForInning = battingRows
+        .filter((row) => normaliseScoreboardLabel((row as Record<string, unknown>).scoreboard) === scoreboardLabel)
+        .map((row) => {
+          const raw = row as Record<string, unknown>;
+          return normaliseBattingRow({
+            ...raw,
+            player_name: playerNameById.get(String(raw.player_id ?? "")) ?? raw.player_name,
+            dismissal:
+              raw.active === true
+                ? "batting"
+                : Number(raw.wicket_id ?? 0) > 0
+                  ? "out"
+                  : "did not bat",
+          });
+        });
+
+      const bowlingForInning = bowlingRows
+        .filter((row) => normaliseScoreboardLabel((row as Record<string, unknown>).scoreboard) === scoreboardLabel)
+        .map((row) => {
+          const raw = row as Record<string, unknown>;
+          return normaliseBowlingRow({
+            ...raw,
+            player_name: playerNameById.get(String(raw.player_id ?? "")) ?? raw.player_name,
+            maidens: raw.medians,
+          });
+        });
+
+      const battingTeamId = Number(battingSourceRow?.team_id ?? 0);
+      const runRow =
+        runs.find((run) => Number(run.inning ?? 0) === index + 1) ??
+        runs.find((run) => Number(run.team_id) === battingTeamId) ??
+        runs[index];
+      const resolvedBattingTeamId = battingTeamId || Number(runRow?.team_id ?? 0);
+
+      const battingTeamName =
+        resolvedBattingTeamId === fixture.localteam?.id
+          ? fixture.localteam.name
+          : resolvedBattingTeamId === fixture.visitorteam?.id
+            ? fixture.visitorteam.name
+            : `Team ${resolvedBattingTeamId}`;
 
       return {
-        inning: String(raw.name ?? raw.inning ?? `Innings ${index + 1}`),
-        totalRuns: Number(raw.score ?? raw.total_runs ?? raw.totalRuns ?? 0),
-        totalWickets: Number(raw.wickets ?? raw.total_wickets ?? raw.totalWickets ?? 0),
-        totalOvers: Number(raw.overs ?? raw.total_overs ?? raw.totalOvers ?? 0),
-        extras: String(raw.extras ?? ""),
-        batting: battingRows.map((row) => normaliseBattingRow(row as Record<string, unknown>)),
-        bowling: bowlingRows.map((row) => normaliseBowlingRow(row as Record<string, unknown>)),
+        inning: `${battingTeamName} Innings ${index + 1}`,
+        totalRuns: Number(runRow?.score ?? 0),
+        totalWickets: Number(runRow?.wickets ?? 0),
+        totalOvers: Number(runRow?.overs ?? 0),
+        extras: "",
+        batting: battingForInning,
+        bowling: bowlingForInning,
       };
     })
     .filter((inning) => inning.batting.length > 0 || inning.bowling.length > 0 || inning.totalRuns > 0);
@@ -375,13 +500,113 @@ function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
   return parsed.length > 0 ? parsed : null;
 }
 
-export async function getSMScorecard(id: string): Promise<Scorecard[] | null> {
+export async function getSMScorecard(id: string, options: SportMonksRequestOptions = {}): Promise<Scorecard[] | null> {
   const data = await smFetch<SMFixture>(`/fixtures/${id}`, {
-    include: `${INCLUDES},scorecards`,
-  }, 20);
+    include: SCORECARD_INCLUDES,
+  }, { revalidateSeconds: 20, ...options });
 
   if (!data) return null;
   return parseSportMonksScorecards(data);
+}
+
+function decimalBallToParts(value: unknown) {
+  const numeric = typeof value === "number" ? value : Number.parseFloat(String(value ?? 0));
+  if (!Number.isFinite(numeric)) {
+    return { over: 0, ball: 0 };
+  }
+
+  const over = Math.floor(numeric);
+  const ball = Math.round((numeric - over) * 10);
+  return { over, ball };
+}
+
+function describeBallScore(score: Record<string, unknown>, ballLabel: string, bowler: string, batter: string, dismissedBatter?: string) {
+  const scoreName = typeof score.name === "string" ? score.name : "";
+  const runs = Number(score.runs ?? 0);
+  const byes = Number(score.bye ?? 0);
+  const legByes = Number(score.leg_bye ?? 0);
+  const noBallRuns = Number(score.noball_runs ?? 0);
+  const isWicket = Boolean(score.is_wicket || score.out);
+
+  if (isWicket) {
+    const wicketLabel = dismissedBatter ? `${dismissedBatter} is out` : "Wicket";
+    return `${ballLabel} ${bowler} to ${batter}, ${scoreName || "Wicket"}! ${wicketLabel}.`;
+  }
+
+  if (byes > 0) return `${ballLabel} ${bowler} to ${batter}, ${byes} bye${byes === 1 ? "" : "s"}.`;
+  if (legByes > 0) return `${ballLabel} ${bowler} to ${batter}, ${legByes} leg bye${legByes === 1 ? "" : "s"}.`;
+  if (noBallRuns > 0 && runs === 0) return `${ballLabel} ${bowler} to ${batter}, no-ball for ${noBallRuns}.`;
+  if (score.four) return `${ballLabel} ${bowler} to ${batter}, FOUR.`;
+  if (score.six) return `${ballLabel} ${bowler} to ${batter}, SIX.`;
+  if (runs === 0) return `${ballLabel} ${bowler} to ${batter}, no run.`;
+  if (runs === 1) return `${ballLabel} ${bowler} to ${batter}, 1 run.`;
+  return `${ballLabel} ${bowler} to ${batter}, ${runs} runs.`;
+}
+
+export async function getSMCommentary(id: string, options: SportMonksRequestOptions = {}): Promise<Commentary | null> {
+  const data = await smFetch<SMFixture>(`/fixtures/${id}`, {
+    include: COMMENTARY_INCLUDES,
+  }, { revalidateSeconds: 10, ...options });
+
+  if (!data || !Array.isArray(data.balls)) return null;
+
+  const balls = data.balls as Array<Record<string, unknown>>;
+  if (balls.length === 0) return null;
+
+  const commentary = balls
+    .map((entry) => {
+      const { over, ball } = decimalBallToParts(entry.ball);
+      const batter = typeof (entry.batsman as Record<string, unknown> | undefined)?.fullname === "string"
+        ? String((entry.batsman as Record<string, unknown>).fullname)
+        : "Unknown Batter";
+      const bowler = typeof (entry.bowler as Record<string, unknown> | undefined)?.fullname === "string"
+        ? String((entry.bowler as Record<string, unknown>).fullname)
+        : "Unknown Bowler";
+      const dismissedBatter = typeof entry.batsmanout_id === "number"
+        ? undefined
+        : undefined;
+      const score = ((entry.score as Record<string, unknown> | undefined) ?? {});
+      const scoreValue = Number(score.runs ?? 0) + Number(score.bye ?? 0) + Number(score.leg_bye ?? 0) + Number(score.noball_runs ?? 0);
+      const ballLabel = `${over}.${ball}`;
+
+      return {
+        id: String(entry.id ?? `${over}-${ball}`),
+        over,
+        ball,
+        score: Number.isFinite(scoreValue) ? scoreValue : 0,
+        batsman: batter,
+        bowler,
+        commentary: describeBallScore(score, ballLabel, bowler, batter),
+        timestamp: typeof entry.updated_at === "string" ? entry.updated_at : new Date().toISOString(),
+      };
+    })
+    .sort((left, right) => {
+      const leftValue = left.over * 10 + left.ball;
+      const rightValue = right.over * 10 + right.ball;
+      return rightValue - leftValue;
+    });
+
+  return { bbb: commentary };
+}
+
+export async function getSMSquads(id: string, options: SportMonksRequestOptions = {}): Promise<Squad[] | null> {
+  const data = await smFetch<SMFixture>(`/fixtures/${id}`, {
+    include: SQUAD_INCLUDES,
+  }, { revalidateSeconds: 60, ...options });
+
+  if (!data || !Array.isArray(data.lineup) || !data.localteam || !data.visitorteam) {
+    return null;
+  }
+
+  const { teamPlayers } = buildPlayerNameIndex(data.lineup, data.localteam, data.visitorteam);
+  const teams = [data.localteam, data.visitorteam];
+
+  return teams.map((team) => ({
+    teamName: team.name,
+    shortname: team.code,
+    img: team.image_path,
+    players: teamPlayers.get(team.id) ?? [],
+  }));
 }
 
 /**
@@ -397,13 +622,33 @@ export async function getSMUpcoming(): Promise<Match[] | null> {
   const data = await smFetch<SMFixture[]>("/fixtures", {
     include: INCLUDES,
     "filter[starts_between]": `${fmt(now)},${fmt(future)}`,
-  }, 300);
+  }, { revalidateSeconds: 300 });
 
   if (!data) return null;
   return data
     .map(normaliseFixture)
     .filter((m) => !m.matchStarted)
     .sort((a, b) => a.dateTimeGMT.localeCompare(b.dateTimeGMT))
+    .slice(0, 20);
+}
+
+export async function getSMRecentResults(): Promise<Match[] | null> {
+  const now = new Date();
+  const past = new Date(now);
+  past.setDate(now.getDate() - 3);
+
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+
+  const data = await smFetch<SMFixture[]>("/fixtures", {
+    include: INCLUDES,
+    "filter[starts_between]": `${fmt(past)},${fmt(now)}`,
+  }, { revalidateSeconds: 120 });
+
+  if (!data) return null;
+  return data
+    .map(normaliseFixture)
+    .filter((m) => m.matchEnded)
+    .sort((a, b) => b.dateTimeGMT.localeCompare(a.dateTimeGMT))
     .slice(0, 20);
 }
 

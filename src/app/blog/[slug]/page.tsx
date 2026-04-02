@@ -90,14 +90,59 @@ interface BlogData {
       summary?: string;
       searchBackend?: string;
       providerAvailable?: boolean;
+      historicalWarehouseAvailable?: boolean;
+      historicalWarehouseError?: string | null;
       searchError?: string | null;
+      claimRouting?: {
+        historicalStructured?: number;
+        webSearch?: number;
+        unsupported?: number;
+        reroutedToWeb?: number;
+      } | null;
       directStats?: {
         source?: "live" | "fallback";
         claimsFound?: number;
         claimsVerified?: number;
         accuracy?: number;
       } | null;
+      historicalClaims?: {
+        claimsRouted?: number;
+        claimsResolved?: number;
+        supported?: number;
+        contradicted?: number;
+        inconclusive?: number;
+        score?: number;
+        summary?: string;
+        verdicts?: Array<{
+          claim: string;
+          query: string;
+          category: string;
+          route?: "historical_structured" | "web_search" | "unsupported";
+          verdict: "supported" | "contradicted" | "inconclusive";
+          confidence: number;
+          evidence: string;
+          intent?: {
+            subjectType?: string;
+            subject?: string;
+            metric?: string;
+            comparison?: string | null;
+            expectedValue?: number | null;
+            matchType?: string | null;
+            competition?: string | null;
+            opponent?: string | null;
+            venue?: string | null;
+          } | null;
+          sources: Array<{
+            title: string;
+            url: string;
+            snippet: string;
+            domain: string;
+            publishedDate?: string | null;
+          }>;
+        }>;
+      } | null;
       webClaims?: {
+        claimsRouted?: number;
         claimsResearched?: number;
         supported?: number;
         contradicted?: number;
@@ -512,6 +557,11 @@ export default function BlogSlugPage({
                     <span>
                       ✅ {blog.score.statsVerified}/{blog.score.statsFound} direct stats verified
                     </span>
+                    {blog.score.factCheckJson?.historicalClaims?.claimsResolved ? (
+                      <span>
+                        🗂️ {blog.score.factCheckJson.historicalClaims.claimsResolved} historical claims checked
+                      </span>
+                    ) : null}
                     {blog.score.factCheckJson?.webClaims?.claimsResearched ? (
                       <span>
                         🌐 {blog.score.factCheckJson.webClaims.claimsResearched} web claims checked
@@ -593,7 +643,23 @@ export default function BlogSlugPage({
                   <p className="mt-1 text-xs text-gray-400">Scorecard verified</p>
                 </div>
                 <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Broader Web Claims</p>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Historical Warehouse</p>
+                  <p className="mt-2 text-lg font-black text-white">
+                    {blog.score.factCheckJson.historicalClaims?.claimsResolved ?? 0}
+                  </p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    {blog.score.factCheckJson.historicalWarehouseAvailable
+                      ? "Structured history checked"
+                      : "Warehouse unavailable"}
+                  </p>
+                  {blog.score.factCheckJson.historicalWarehouseError ? (
+                    <p className="mt-2 text-xs text-red-400">
+                      {blog.score.factCheckJson.historicalWarehouseError}
+                    </p>
+                  ) : null}
+                </div>
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Web Claim Checks</p>
                   <p className="mt-2 text-lg font-black text-white">
                     {blog.score.factCheckJson.webClaims?.claimsResearched ?? 0}
                   </p>
@@ -605,6 +671,21 @@ export default function BlogSlugPage({
                       {blog.score.factCheckJson.searchError}
                     </p>
                   ) : null}
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Historical Verdict Split</p>
+                  <p className="mt-2 text-sm text-gray-300">
+                    ✅ {blog.score.factCheckJson.historicalClaims?.supported ?? 0} supported
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    ❌ {blog.score.factCheckJson.historicalClaims?.contradicted ?? 0} contradicted
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    ⚪ {blog.score.factCheckJson.historicalClaims?.inconclusive ?? 0} inconclusive
+                  </p>
                 </div>
                 <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Web Verdict Split</p>
@@ -618,7 +699,50 @@ export default function BlogSlugPage({
                     ⚪ {blog.score.factCheckJson.webClaims?.inconclusive ?? 0} inconclusive
                   </p>
                 </div>
+                <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Claim Routing</p>
+                  <p className="mt-2 text-sm text-gray-300">
+                    🗂️ {blog.score.factCheckJson.claimRouting?.historicalStructured ?? 0} historical
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    🌐 {blog.score.factCheckJson.claimRouting?.webSearch ?? 0} web
+                  </p>
+                  <p className="mt-1 text-sm text-gray-300">
+                    ↪️ {blog.score.factCheckJson.claimRouting?.reroutedToWeb ?? 0} rerouted
+                  </p>
+                </div>
               </div>
+
+              {blog.score.factCheckJson.historicalClaims?.verdicts && blog.score.factCheckJson.historicalClaims.verdicts.length > 0 ? (
+                <div className="space-y-3">
+                  {blog.score.factCheckJson.historicalClaims.verdicts.map((verdict) => {
+                    const verdictMeta = getFactVerdictMeta(verdict.verdict);
+
+                    return (
+                      <div key={`${verdict.claim}:${verdict.query}:historical`} className="rounded-xl border border-gray-800 bg-cg-dark p-4">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold ${verdictMeta.className}`}>
+                            {verdictMeta.label}
+                          </span>
+                          <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-gray-300">
+                            {Math.round(verdict.confidence * 100)}% confidence
+                          </span>
+                          <span className="rounded-full bg-white/5 px-2.5 py-1 text-[10px] font-semibold text-gray-500">
+                            structured historical check
+                          </span>
+                        </div>
+                        <p className="mt-3 text-sm font-semibold text-white">{verdict.claim}</p>
+                        <p className="mt-2 text-sm text-gray-300">{verdict.evidence}</p>
+                        {verdict.intent ? (
+                          <p className="mt-3 text-xs text-gray-500">
+                            Routed as {verdict.intent.subjectType || "historical"} / {(verdict.intent.metric || "structured_check").replace(/_/g, " ")}
+                          </p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
 
               {blog.score.factCheckJson.webClaims?.verdicts && blog.score.factCheckJson.webClaims.verdicts.length > 0 ? (
                 <div className="space-y-3">

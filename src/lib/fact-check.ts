@@ -1,4 +1,11 @@
 import { getOllamaHeaders, getOllamaUrl } from "@/lib/ollama";
+import {
+  getHistoricalWarehouseStatus,
+  isHistoricalIntentSupported,
+  runHistoricalWarehouseCheck,
+  type HistoricalQueryIntent,
+  type HistoricalWarehouseClaim,
+} from "@/lib/historical-warehouse";
 
 const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_MODEL = process.env.OLLAMA_BQS_MODEL || process.env.OLLAMA_MODEL || "qwen3.5:latest";
@@ -33,6 +40,7 @@ const DEFAULT_EXCLUDED_DOMAINS = [
 
 export type SearchBackend = "tavily" | "serper" | "none";
 export type FactCheckVerdict = "supported" | "contradicted" | "inconclusive";
+export type ClaimRoute = "historical_structured" | "web_search" | "unsupported";
 
 export interface FactCheckSource {
   title: string;
@@ -46,14 +54,18 @@ export interface FactCheckVerdictEntry {
   claim: string;
   query: string;
   category: string;
+  route?: ClaimRoute;
   verdict: FactCheckVerdict;
   confidence: number;
   evidence: string;
   sources: FactCheckSource[];
+  intent?: HistoricalQueryIntent | null;
 }
 
 export interface WebFactCheckReport {
   providerAvailable: boolean;
+  historicalWarehouseAvailable?: boolean;
+  historicalWarehouseError?: string | null;
   searchBackend: SearchBackend;
   searchError?: string | null;
   claimsDetected: number;
@@ -63,6 +75,32 @@ export interface WebFactCheckReport {
   inconclusive: number;
   score: number;
   summary: string;
+  claimRouting?: {
+    historicalStructured: number;
+    webSearch: number;
+    unsupported: number;
+    reroutedToWeb: number;
+  };
+  historicalClaims?: {
+    claimsRouted: number;
+    claimsResolved: number;
+    supported: number;
+    contradicted: number;
+    inconclusive: number;
+    score: number;
+    summary: string;
+    verdicts: FactCheckVerdictEntry[];
+  };
+  webClaims?: {
+    claimsRouted: number;
+    claimsResearched: number;
+    supported: number;
+    contradicted: number;
+    inconclusive: number;
+    score: number;
+    summary: string;
+    verdicts: FactCheckVerdictEntry[];
+  };
   verdicts: FactCheckVerdictEntry[];
 }
 
@@ -70,6 +108,8 @@ type ResearchClaim = {
   claim: string;
   query: string;
   category: string;
+  route: ClaimRoute;
+  intent?: HistoricalQueryIntent | null;
 };
 
 type ClaimExtractionPayload = {
@@ -320,7 +360,7 @@ function dedupeClaims(claims: ResearchClaim[]): ResearchClaim[] {
   const deduped: ResearchClaim[] = [];
 
   for (const claim of claims) {
-    const key = `${claim.claim.toLowerCase()}::${claim.query.toLowerCase()}`;
+    const key = `${claim.claim.toLowerCase()}::${claim.query.toLowerCase()}::${claim.route}`;
     if (seen.has(key)) continue;
     seen.add(key);
     deduped.push(claim);
@@ -352,7 +392,22 @@ Return strict JSON only in this shape:
     {
       "claim": "",
       "query": "",
-      "category": "historical|record|career|context|news"
+      "category": "historical|record|career|context|news",
+      "route": "historical_structured|web_search|unsupported",
+      "intent": {
+        "subjectType": "player|team|venue",
+        "subject": "",
+        "metric": "matches|runs|wickets|batting_average|strike_rate|economy|centuries|fifties|four_wicket_hauls|five_wicket_hauls|head_to_head_wins|wins_at_venue",
+        "comparison": "eq|gte|lte|gt|lt",
+        "expectedValue": 0,
+        "matchType": "Test|ODI|T20|IT20|IPL|all",
+        "competition": "",
+        "opponent": "",
+        "venue": "",
+        "team": "",
+        "since": "YYYY-MM-DD",
+        "until": "YYYY-MM-DD"
+      }
     }
   ]
 }
@@ -361,7 +416,10 @@ Rules:
 - Extract only concrete, checkable factual claims.
 - Exclude opinions, predictions, sentiment, and writing quality statements.
 - Exclude direct single-match player scorecard claims like "Rohit scored 52" because another checker handles those.
-- Focus on records, historical comparisons, averages, streaks, venue history, rankings, awards, team news, and selection/injury claims.
+- Use route "historical_structured" only when the claim can be checked via a structured cricket-history warehouse with the supported metrics above.
+- Use route "web_search" for rankings, awards, streaks that need prose context, injury/selection/news, quotes, current status, and any historical claim that does not fit the supported metrics cleanly.
+- Use route "unsupported" for vague or uncheckable claims.
+- If route is "historical_structured", fill the intent carefully and only when subject, metric, comparison, and expectedValue are concrete.
 - Keep the query short and search-friendly.
 - Keep at most ${MAX_WEB_CLAIMS} claims.
 
@@ -410,7 +468,34 @@ ${input.content}`;
           claim: claim.claim.trim().slice(0, 220),
           query: claim.query.trim().slice(0, 160),
           category: claim.category.trim().slice(0, 40).toLowerCase(),
+          route:
+            claim.route === "historical_structured" || claim.route === "web_search" || claim.route === "unsupported"
+              ? claim.route
+              : "web_search",
+          intent:
+            claim.route === "historical_structured" &&
+            isHistoricalIntentSupported(claim.intent as HistoricalQueryIntent | null | undefined) &&
+            typeof claim.intent?.comparison === "string" &&
+            typeof claim.intent?.expectedValue === "number"
+              ? {
+                  ...claim.intent,
+                  subject: String(claim.intent.subject).trim().slice(0, 120),
+                  matchType: typeof claim.intent.matchType === "string" ? claim.intent.matchType.trim().slice(0, 30) : null,
+                  competition:
+                    typeof claim.intent.competition === "string" ? claim.intent.competition.trim().slice(0, 120) : null,
+                  opponent: typeof claim.intent.opponent === "string" ? claim.intent.opponent.trim().slice(0, 120) : null,
+                  venue: typeof claim.intent.venue === "string" ? claim.intent.venue.trim().slice(0, 160) : null,
+                  team: typeof claim.intent.team === "string" ? claim.intent.team.trim().slice(0, 120) : null,
+                  since: typeof claim.intent.since === "string" ? claim.intent.since.trim().slice(0, 20) : null,
+                  until: typeof claim.intent.until === "string" ? claim.intent.until.trim().slice(0, 20) : null,
+                }
+              : null,
         }))
+        .map((claim) =>
+          claim.route === "historical_structured" && !claim.intent
+            ? { ...claim, route: "web_search" as const }
+            : claim
+        )
     ).slice(0, MAX_WEB_CLAIMS);
   } catch (error) {
     console.warn("[fact-check] Claim extraction unavailable:", error);
@@ -653,6 +738,7 @@ ${sourceBlock}`;
         claim: target.claim.claim,
         query: target.claim.query,
         category: target.claim.category,
+        route: "web_search",
         verdict,
         confidence: clampUnit(item.confidence, verdict === "inconclusive" ? 0.35 : 0.6),
         evidence: safeSnippet(item.evidence, 220) || fallbackEvidence(verdict),
@@ -675,6 +761,7 @@ ${sourceBlock}`;
         claim: claim.claim.claim,
         query: claim.claim.query,
         category: claim.claim.category,
+        route: "web_search",
         verdict: claim.evidence.sources.length > 0 ? "inconclusive" : "inconclusive",
         confidence: 0.35,
         evidence: claim.evidence.sources.length > 0
@@ -700,6 +787,7 @@ function buildFallbackVerdicts(claims: ClaimWithSearch[]): FactCheckVerdictEntry
     claim: claim.claim,
     query: claim.query,
     category: claim.category,
+    route: "web_search" as const,
     verdict: "inconclusive" as const,
     confidence: 0.25,
     evidence: evidence.sources.length > 0
@@ -770,9 +858,15 @@ export async function runWebFactCheck(input: {
   title?: string;
   content: string;
 }): Promise<WebFactCheckReport> {
+  const providerAvailable = Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY);
+
   if (!looksLikeClaimHeavyContent(input.content)) {
+    const warehouseStatus = await getHistoricalWarehouseStatus();
+
     return {
-      providerAvailable: Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY),
+      providerAvailable,
+      historicalWarehouseAvailable: warehouseStatus.available,
+      historicalWarehouseError: warehouseStatus.error ?? null,
       searchBackend: "none",
       searchError: null,
       claimsDetected: 0,
@@ -781,17 +875,66 @@ export async function runWebFactCheck(input: {
       contradicted: 0,
       inconclusive: 0,
       score: 75,
-      summary: "No broader factual claims needed web verification.",
+      summary: "No broader factual claims needed external verification.",
+      claimRouting: {
+        historicalStructured: 0,
+        webSearch: 0,
+        unsupported: 0,
+        reroutedToWeb: 0,
+      },
+      historicalClaims: {
+        claimsRouted: 0,
+        claimsResolved: 0,
+        supported: 0,
+        contradicted: 0,
+        inconclusive: 0,
+        score: 75,
+        summary: "No structured historical claims were routed to the warehouse.",
+        verdicts: [],
+      },
+      webClaims: {
+        claimsRouted: 0,
+        claimsResearched: 0,
+        supported: 0,
+        contradicted: 0,
+        inconclusive: 0,
+        score: 75,
+        summary: providerAvailable
+          ? "No web-search claims were routed for verification."
+          : "Web fact-checking is disabled because no search API key is configured.",
+        verdicts: [],
+      },
       verdicts: [],
     };
   }
 
-  const providerAvailable = Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY);
   const claims = await extractResearchClaimsWithOllama(input);
+  const historicalStructuredClaims = claims.filter(
+    (claim): claim is ResearchClaim & { intent: HistoricalQueryIntent } =>
+      claim.route === "historical_structured" && isHistoricalIntentSupported(claim.intent)
+  );
+  const explicitWebClaims = claims.filter((claim) => claim.route === "web_search");
+  const unsupportedCount = claims.filter((claim) => claim.route === "unsupported").length;
+  const historicalInput: HistoricalWarehouseClaim[] = historicalStructuredClaims.map((claim) => ({
+    claim: claim.claim,
+    query: claim.query,
+    category: claim.category,
+    intent: claim.intent,
+  }));
+
+  const historicalReport = await runHistoricalWarehouseCheck(historicalInput);
+  const reroutedToWeb = historicalReport.fallbackClaims.length;
+  const webClaims = [...explicitWebClaims, ...historicalReport.fallbackClaims.map((claim) => ({
+    ...claim,
+    route: "web_search" as const,
+    intent: claim.intent,
+  }))];
 
   if (claims.length === 0) {
     return {
       providerAvailable,
+      historicalWarehouseAvailable: historicalReport.warehouseAvailable,
+      historicalWarehouseError: historicalReport.warehouseError ?? null,
       searchBackend: "none",
       searchError: null,
       claimsDetected: 0,
@@ -801,99 +944,162 @@ export async function runWebFactCheck(input: {
       inconclusive: 0,
       score: 75,
       summary: providerAvailable
-        ? "No broader factual claims needed web verification."
-        : "Web fact-checking is disabled because no search API key is configured.",
-      verdicts: [],
-    };
-  }
-
-  if (!providerAvailable) {
-    return {
-      providerAvailable: false,
-      searchBackend: "none",
-      searchError: null,
-      claimsDetected: claims.length,
-      claimsResearched: 0,
-      supported: 0,
-      contradicted: 0,
-      inconclusive: 0,
-      score: 75,
-      summary: buildSummary({
-        backend: "none",
-        searchError: null,
-        claimsDetected: claims.length,
+        ? "No broader factual claims needed external verification."
+        : "No broader factual claims needed verification, and no search backend is configured.",
+      claimRouting: {
+        historicalStructured: 0,
+        webSearch: 0,
+        unsupported: 0,
+        reroutedToWeb: 0,
+      },
+      historicalClaims: {
+        claimsRouted: 0,
+        claimsResolved: 0,
+        supported: 0,
+        contradicted: 0,
+        inconclusive: 0,
+        score: 75,
+        summary: "No structured historical claims were routed to the warehouse.",
+        verdicts: [],
+      },
+      webClaims: {
+        claimsRouted: 0,
         claimsResearched: 0,
         supported: 0,
         contradicted: 0,
         inconclusive: 0,
-        providerAvailable: false,
-      }),
+        score: 75,
+        summary: providerAvailable
+          ? "No web-search claims were routed for verification."
+          : "Web fact-checking is disabled because no search API key is configured.",
+        verdicts: [],
+      },
       verdicts: [],
     };
   }
 
-  const withSearch = await Promise.all(
-    claims.map(async (claim) => ({
-      claim,
-      evidence: await searchEvidenceForClaim(claim),
-    }))
-  );
+  let backend: SearchBackend = "none";
+  let searchError: string | null = null;
+  let webVerdicts: FactCheckVerdictEntry[] = [];
 
-  const backend = withSearch.find((item) => item.evidence.backend !== "none")?.evidence.backend ?? "none";
-  const searchError = withSearch.find((item) => item.evidence.error)?.evidence.error ?? null;
-  const searchableClaims = withSearch.filter((item) => item.evidence.sources.length > 0);
+  if (webClaims.length > 0 && providerAvailable) {
+    const withSearch = await Promise.all(
+      webClaims.map(async (claim) => ({
+        claim,
+        evidence: await searchEvidenceForClaim(claim),
+      }))
+    );
 
-  if (searchableClaims.length === 0) {
-    return {
-      providerAvailable,
-      searchBackend: backend,
-      searchError,
-      claimsDetected: claims.length,
-      claimsResearched: 0,
-      supported: 0,
-      contradicted: 0,
-      inconclusive: 0,
-      score: 75,
-      summary: buildSummary({
-        backend,
-        searchError,
-        claimsDetected: claims.length,
-        claimsResearched: 0,
-        supported: 0,
-        contradicted: 0,
-        inconclusive: 0,
-        providerAvailable,
-      }),
-      verdicts: [],
-    };
+    backend = withSearch.find((item) => item.evidence.backend !== "none")?.evidence.backend ?? "none";
+    searchError = withSearch.find((item) => item.evidence.error)?.evidence.error ?? null;
+
+    const searchableClaims = withSearch.filter((item) => item.evidence.sources.length > 0);
+    if (searchableClaims.length > 0) {
+      webVerdicts = await evaluateClaimsWithOllama(searchableClaims);
+    }
+  } else if (webClaims.length > 0 && !providerAvailable) {
+    searchError = "No search API key is configured for web fact-checking.";
   }
 
-  const verdictsFromModel = await evaluateClaimsWithOllama(searchableClaims);
+  const webSupported = webVerdicts.filter((item) => item.verdict === "supported").length;
+  const webContradicted = webVerdicts.filter((item) => item.verdict === "contradicted").length;
+  const webInconclusive = webVerdicts.filter((item) => item.verdict === "inconclusive").length;
+  const webScore = computeFactCheckScore(webSupported, webContradicted, webInconclusive);
+  const webSummary = buildSummary({
+    backend,
+    searchError,
+    claimsDetected: webClaims.length,
+    claimsResearched: webVerdicts.length,
+    supported: webSupported,
+    contradicted: webContradicted,
+    inconclusive: webInconclusive,
+    providerAvailable,
+  });
 
-  const supported = verdictsFromModel.filter((item) => item.verdict === "supported").length;
-  const contradicted = verdictsFromModel.filter((item) => item.verdict === "contradicted").length;
-  const inconclusive = verdictsFromModel.filter((item) => item.verdict === "inconclusive").length;
+  const historicalResolved = historicalReport.claimsResolved;
+  const totalResearched = historicalResolved + webVerdicts.length;
+  const totalSupported = historicalReport.supported + webSupported;
+  const totalContradicted = historicalReport.contradicted + webContradicted;
+  const totalInconclusive = historicalReport.inconclusive + webInconclusive;
+
+  let overallScore = 75;
+  if (historicalResolved > 0 && webVerdicts.length > 0) {
+    overallScore =
+      (historicalReport.score * historicalResolved + webScore * webVerdicts.length) /
+      (historicalResolved + webVerdicts.length);
+  } else if (historicalResolved > 0) {
+    overallScore = historicalReport.score;
+  } else if (webVerdicts.length > 0) {
+    overallScore = webScore;
+  }
+
+  const summaryParts = [
+    historicalReport.summary,
+    webSummary,
+  ].filter(Boolean);
 
   return {
     providerAvailable,
+    historicalWarehouseAvailable: historicalReport.warehouseAvailable,
+    historicalWarehouseError: historicalReport.warehouseError ?? null,
     searchBackend: backend,
     searchError,
     claimsDetected: claims.length,
-    claimsResearched: verdictsFromModel.length,
-    supported,
-    contradicted,
-    inconclusive,
-    score: computeFactCheckScore(supported, contradicted, inconclusive),
-    summary: buildSummary({
-      backend,
-      searchError,
-      claimsDetected: claims.length,
-      claimsResearched: verdictsFromModel.length,
-      supported,
-      contradicted,
-      inconclusive,
-      providerAvailable,
-    }),
-    verdicts: verdictsFromModel,
+    claimsResearched: totalResearched,
+    supported: totalSupported,
+    contradicted: totalContradicted,
+    inconclusive: totalInconclusive,
+    score: clampScore(overallScore, 75),
+    summary: summaryParts.join(" "),
+    claimRouting: {
+      historicalStructured: historicalStructuredClaims.length,
+      webSearch: explicitWebClaims.length,
+      unsupported: unsupportedCount,
+      reroutedToWeb,
+    },
+    historicalClaims: {
+      claimsRouted: historicalReport.claimsRouted,
+      claimsResolved: historicalReport.claimsResolved,
+      supported: historicalReport.supported,
+      contradicted: historicalReport.contradicted,
+      inconclusive: historicalReport.inconclusive,
+      score: historicalReport.score,
+      summary: historicalReport.summary,
+      verdicts: historicalReport.verdicts.map((verdict) => ({
+        claim: verdict.claim,
+        query: verdict.query,
+        category: verdict.category,
+        route: "historical_structured" as const,
+        verdict: verdict.verdict,
+        confidence: verdict.confidence,
+        evidence: verdict.evidence,
+        sources: verdict.sources,
+        intent: verdict.intent,
+      })),
+    },
+    webClaims: {
+      claimsRouted: webClaims.length,
+      claimsResearched: webVerdicts.length,
+      supported: webSupported,
+      contradicted: webContradicted,
+      inconclusive: webInconclusive,
+      score: webScore,
+      summary: webSummary,
+      verdicts: webVerdicts,
+    },
+    verdicts: [
+      ...historicalReport.verdicts.map((verdict) => ({
+        claim: verdict.claim,
+        query: verdict.query,
+        category: verdict.category,
+        route: "historical_structured" as const,
+        verdict: verdict.verdict,
+        confidence: verdict.confidence,
+        evidence: verdict.evidence,
+        sources: verdict.sources,
+        intent: verdict.intent,
+      })),
+      ...webVerdicts,
+    ],
   };
 }

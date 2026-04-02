@@ -238,6 +238,103 @@ model WriterBadge {
   @@unique([userId, badge])
 }
 
+model HistoricalMatch {
+  id            String   @id @default(cuid()) @db.VarChar(30)
+  source        String   @default("cricsheet") @db.VarChar(30)
+  sourceMatchId String   @db.VarChar(120)
+  startedAt     DateTime?
+  season        String?  @db.VarChar(40)
+  matchType     String?  @db.VarChar(20)
+  eventName     String?  @db.VarChar(200)
+  eventNameKey  String?  @db.VarChar(200)
+  venue         String?  @db.VarChar(200)
+  venueKey      String?  @db.VarChar(200)
+  city          String?  @db.VarChar(120)
+  teamA         String   @db.VarChar(120)
+  teamAKey      String   @db.VarChar(120)
+  teamB         String   @db.VarChar(120)
+  teamBKey      String   @db.VarChar(120)
+  winner        String?  @db.VarChar(120)
+  winnerKey     String?  @db.VarChar(120)
+  resultText    String?  @db.VarChar(200)
+  playerOfMatch String?  @db.VarChar(120)
+  rawInfo       Json?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  battingRows   HistoricalBattingInnings[]
+  bowlingRows   HistoricalBowlingInnings[]
+
+  @@unique([source, sourceMatchId], map: "HistoricalMatch_source_sourceMatchId_key")
+  @@index([matchType, startedAt], map: "HistoricalMatch_matchType_startedAt_idx")
+  @@index([teamAKey, teamBKey, startedAt], map: "HistoricalMatch_team_keys_startedAt_idx")
+  @@index([venueKey, startedAt], map: "HistoricalMatch_venueKey_startedAt_idx")
+  @@index([eventNameKey], map: "HistoricalMatch_eventNameKey_idx")
+}
+
+model HistoricalBattingInnings {
+  id               String   @id @default(cuid()) @db.VarChar(30)
+  matchId          String   @db.VarChar(30)
+  inningsNumber    Int
+  inningsTeam      String   @db.VarChar(120)
+  inningsTeamKey   String   @db.VarChar(120)
+  oppositionTeam   String?  @db.VarChar(120)
+  oppositionTeamKey String? @db.VarChar(120)
+  playerName       String   @db.VarChar(120)
+  playerNameKey    String   @db.VarChar(120)
+  playerKey        String   @db.VarChar(120)
+  runs             Int      @default(0)
+  balls            Int      @default(0)
+  fours            Int      @default(0)
+  sixes            Int      @default(0)
+  strikeRate       Float    @default(0)
+  dismissalKind    String?  @db.VarChar(40)
+  notOut           Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  historicalMatch  HistoricalMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([playerKey, inningsTeamKey], map: "HistoricalBattingInnings_playerKey_team_idx")
+  @@index([playerNameKey], map: "HistoricalBattingInnings_playerNameKey_idx")
+  @@index([matchId, inningsNumber], map: "HistoricalBattingInnings_match_innings_idx")
+}
+
+model HistoricalBowlingInnings {
+  id               String   @id @default(cuid()) @db.VarChar(30)
+  matchId          String   @db.VarChar(30)
+  inningsNumber    Int
+  inningsTeam      String   @db.VarChar(120)
+  inningsTeamKey   String   @db.VarChar(120)
+  oppositionTeam   String?  @db.VarChar(120)
+  oppositionTeamKey String? @db.VarChar(120)
+  playerName       String   @db.VarChar(120)
+  playerNameKey    String   @db.VarChar(120)
+  playerKey        String   @db.VarChar(120)
+  overs            Float    @default(0)
+  maidens          Int      @default(0)
+  runsConceded     Int      @default(0)
+  wickets          Int      @default(0)
+  economy          Float    @default(0)
+  dotBalls         Int      @default(0)
+  createdAt        DateTime @default(now())
+  historicalMatch  HistoricalMatch @relation(fields: [matchId], references: [id], onDelete: Cascade)
+
+  @@index([playerKey, inningsTeamKey], map: "HistoricalBowlingInnings_playerKey_team_idx")
+  @@index([playerNameKey], map: "HistoricalBowlingInnings_playerNameKey_idx")
+  @@index([matchId, inningsNumber], map: "HistoricalBowlingInnings_match_innings_idx")
+}
+
+model HistoricalPlayerAlias {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  source       String   @default("cricsheet") @db.VarChar(30)
+  playerKey    String   @db.VarChar(120)
+  aliasName    String   @db.VarChar(120)
+  aliasNameKey String   @db.VarChar(120)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([playerKey, aliasNameKey], map: "HistoricalPlayerAlias_playerKey_aliasNameKey_key")
+  @@index([aliasNameKey], map: "HistoricalPlayerAlias_aliasNameKey_idx")
+}
+
 model WriterAchievement {
   id          String   @id @default(cuid()) @db.VarChar(30)
   userId      String   @db.VarChar(30)

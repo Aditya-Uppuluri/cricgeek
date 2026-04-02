@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
+import { getHistoricalWarehouseStatus } from "@/lib/historical-warehouse";
 import { getOllamaUrl } from "@/lib/ollama";
 
 export async function GET() {
@@ -11,7 +12,6 @@ export async function GET() {
     process.env.TRUST_HOST === "true" ||
     process.env.NODE_ENV !== "production";
   const matchDataConfigured =
-    Boolean(process.env.CRICKET_API_KEY) ||
     Boolean(process.env.SPORTMONKS_API_TOKEN) ||
     process.env.ALLOW_MOCK_MATCH_DATA === "true";
 
@@ -21,7 +21,6 @@ export async function GET() {
     credentialsAuthConfigured: Boolean(authSecret && (authUrl || trustHost)),
     nextAuthConfigured: Boolean(authSecret),
     authUrlConfigured: Boolean(authUrl || trustHost),
-    cricApiConfigured: Boolean(process.env.CRICKET_API_KEY),
     sportMonksConfigured: Boolean(process.env.SPORTMONKS_API_TOKEN),
     matchDataConfigured,
     searchConfigured: Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY),
@@ -30,6 +29,10 @@ export async function GET() {
     ollamaUrl: ollamaUrl || getOllamaUrl(),
     ollamaSharedSecretConfigured: Boolean(process.env.OLLAMA_SHARED_SECRET),
     ollamaModel: process.env.OLLAMA_BQS_MODEL || process.env.OLLAMA_MODEL || "qwen3.5:latest",
+    historicalWarehouseEnabled: process.env.FACT_CHECK_HISTORICAL_ENABLED !== "false",
+    historicalWarehouseAvailable: false,
+    historicalWarehouseMatchesLoaded: 0,
+    historicalWarehouseError: null as string | null,
   };
 
   try {
@@ -37,6 +40,16 @@ export async function GET() {
     checks.database = true;
   } catch (error) {
     console.error("Health check database error:", error);
+  }
+
+  try {
+    const warehouse = await getHistoricalWarehouseStatus(true);
+    checks.historicalWarehouseAvailable = warehouse.available;
+    checks.historicalWarehouseMatchesLoaded = warehouse.matchesLoaded;
+    checks.historicalWarehouseError = warehouse.error ?? null;
+  } catch (error) {
+    checks.historicalWarehouseError =
+      error instanceof Error ? error.message : "Historical warehouse status could not be determined.";
   }
 
   const ok =

@@ -94,7 +94,15 @@ export interface PersistedFactCheckReport {
   summary: string;
   searchBackend: SearchBackend;
   providerAvailable: boolean;
+  historicalWarehouseAvailable?: boolean;
+  historicalWarehouseError?: string | null;
   searchError?: string | null;
+  claimRouting?: {
+    historicalStructured: number;
+    webSearch: number;
+    unsupported: number;
+    reroutedToWeb: number;
+  };
   directStats: {
     source: "live" | "fallback";
     claimsFound: number;
@@ -102,7 +110,18 @@ export interface PersistedFactCheckReport {
     accuracy: number;
     claims: { player: string; stat: string; value: string }[];
   };
+  historicalClaims: {
+    claimsRouted: number;
+    claimsResolved: number;
+    supported: number;
+    contradicted: number;
+    inconclusive: number;
+    score: number;
+    summary: string;
+    verdicts: FactCheckVerdictEntry[];
+  };
   webClaims: {
+    claimsRouted: number;
     claimsResearched: number;
     supported: number;
     contradicted: number;
@@ -1036,12 +1055,33 @@ function computeOverallFactAccuracy(
   fallbackAccuracy: number
 ) {
   const directCheckable = directStats.source === "live" ? directStats.statsFound : 0;
-  const webClaims = webFactCheck.claimsResearched;
+  const historicalClaims = webFactCheck.historicalClaims?.claimsResolved ?? 0;
+  const webClaims = webFactCheck.webClaims?.claimsResearched ?? webFactCheck.claimsResearched;
+  const broaderClaims = historicalClaims + webClaims;
+  const broaderScore = (() => {
+    if (historicalClaims > 0 && webClaims > 0) {
+      return (
+        ((webFactCheck.historicalClaims?.score ?? webFactCheck.score) * historicalClaims +
+          (webFactCheck.webClaims?.score ?? webFactCheck.score) * webClaims) /
+        broaderClaims
+      );
+    }
 
-  if (directCheckable > 0 && webClaims > 0) {
+    if (historicalClaims > 0) {
+      return webFactCheck.historicalClaims?.score ?? webFactCheck.score;
+    }
+
+    if (webClaims > 0) {
+      return webFactCheck.webClaims?.score ?? webFactCheck.score;
+    }
+
+    return webFactCheck.score;
+  })();
+
+  if (directCheckable > 0 && broaderClaims > 0) {
     const blended =
-      (directStats.statAccuracy * directCheckable + webFactCheck.score * webClaims) /
-      (directCheckable + webClaims);
+      (directStats.statAccuracy * directCheckable + broaderScore * broaderClaims) /
+      (directCheckable + broaderClaims);
 
     return clampScore(blended, fallbackAccuracy);
   }
@@ -1050,8 +1090,8 @@ function computeOverallFactAccuracy(
     return directStats.statAccuracy;
   }
 
-  if (webClaims > 0) {
-    return webFactCheck.score;
+  if (broaderClaims > 0) {
+    return broaderScore;
   }
 
   return 75;
@@ -1090,7 +1130,10 @@ function buildPersistedFactCheckReport(
     summary: buildFactCheckSummary(directStats, webFactCheck),
     searchBackend: webFactCheck.searchBackend,
     providerAvailable: webFactCheck.providerAvailable,
+    historicalWarehouseAvailable: webFactCheck.historicalWarehouseAvailable,
+    historicalWarehouseError: webFactCheck.historicalWarehouseError ?? null,
     searchError: webFactCheck.searchError ?? null,
+    claimRouting: webFactCheck.claimRouting,
     directStats: {
       source: directStats.source,
       claimsFound: directClaimsFound,
@@ -1098,14 +1141,34 @@ function buildPersistedFactCheckReport(
       accuracy: directAccuracy,
       claims: directStats.claims,
     },
+    historicalClaims: {
+      claimsRouted: webFactCheck.historicalClaims?.claimsRouted ?? 0,
+      claimsResolved: webFactCheck.historicalClaims?.claimsResolved ?? 0,
+      supported: webFactCheck.historicalClaims?.supported ?? 0,
+      contradicted: webFactCheck.historicalClaims?.contradicted ?? 0,
+      inconclusive: webFactCheck.historicalClaims?.inconclusive ?? 0,
+      score: webFactCheck.historicalClaims?.score ?? 75,
+      summary: webFactCheck.historicalClaims?.summary ?? "No structured historical claims were routed to the warehouse.",
+      verdicts: (webFactCheck.historicalClaims?.verdicts ?? []).map((verdict) => ({
+        ...verdict,
+        sources: verdict.sources.map((source: FactCheckSource) => ({
+          title: source.title,
+          url: source.url,
+          snippet: source.snippet,
+          domain: source.domain,
+          publishedDate: source.publishedDate ?? null,
+        })),
+      })),
+    },
     webClaims: {
-      claimsResearched: webFactCheck.claimsResearched,
-      supported: webFactCheck.supported,
-      contradicted: webFactCheck.contradicted,
-      inconclusive: webFactCheck.inconclusive,
-      score: webFactCheck.score,
-      summary: webFactCheck.summary,
-      verdicts: webFactCheck.verdicts.map((verdict) => ({
+      claimsRouted: webFactCheck.webClaims?.claimsRouted ?? 0,
+      claimsResearched: webFactCheck.webClaims?.claimsResearched ?? webFactCheck.claimsResearched,
+      supported: webFactCheck.webClaims?.supported ?? webFactCheck.supported,
+      contradicted: webFactCheck.webClaims?.contradicted ?? webFactCheck.contradicted,
+      inconclusive: webFactCheck.webClaims?.inconclusive ?? webFactCheck.inconclusive,
+      score: webFactCheck.webClaims?.score ?? webFactCheck.score,
+      summary: webFactCheck.webClaims?.summary ?? webFactCheck.summary,
+      verdicts: (webFactCheck.webClaims?.verdicts ?? webFactCheck.verdicts).map((verdict) => ({
         ...verdict,
         sources: verdict.sources.map((source: FactCheckSource) => ({
           title: source.title,
@@ -1434,7 +1497,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     statAccuracy: finalStatAccuracy,
     factCheck,
     processingTimeMs: Date.now() - started,
-    scoreVersion: aiResult ? "qwen3.5-v4-sarcasm-guardrail" : "heuristic-fallback-v1",
+    scoreVersion: aiResult ? "qwen3.5-v5-routed-factcheck" : "heuristic-fallback-v1",
   };
 }
 

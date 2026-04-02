@@ -46,8 +46,7 @@ Minimum required:
 - `NEXTAUTH_SECRET`
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
-- `CRICKET_API_KEY`
-- `CRICKET_SERIES_ID_IPL`
+- `SPORTMONKS_API_TOKEN`
 - `OLLAMA_URL`
 - `OLLAMA_BASE_URL` if you run the Python AI service separately
 - `OLLAMA_BQS_MODEL`
@@ -93,14 +92,11 @@ For NextAuth on Vercel, the callback path is:
 ## 7. Cricket data setup
 
 Recommended:
-- set `CRICKET_API_KEY`
-- set `CRICKET_SERIES_ID_IPL`
-- set `SPORTMONKS_API_TOKEN` if you want richer scorecard coverage fallback
+- set `SPORTMONKS_API_TOKEN`
 
 Behavior:
-- CricAPI drives fixtures/live match data
-- SportMonks scorecards are used when configured and available
-- if both are missing, the app should avoid mock production data when `ALLOW_MOCK_MATCH_DATA=false`
+- SportMonks drives fixtures, livescores, scorecards, commentary, and squads
+- if `SPORTMONKS_API_TOKEN` is missing, the app should avoid mock production data when `ALLOW_MOCK_MATCH_DATA=false`
 
 ## 8. Vercel project settings
 

@@ -1,51 +1,35 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
-import { getCurrentMatches, getMatches, getSeriesMatches, isCricApiConfigured, isCricApiKeySet } from "@/services/cricapi";
-import { getSMScorecard, isSportMonksConfigured } from "@/lib/sportmonks";
+import {
+  getSMCommentary,
+  getSMFixture,
+  getSMLivescores,
+  getSMRecentResults,
+  getSMScorecard,
+  getSMSquads,
+  getSMUpcoming,
+  isSportMonksConfigured,
+} from "@/lib/sportmonks";
 
-const API_KEY = process.env.CRICKET_API_KEY || "";
-const BASE_URL = process.env.CRICKET_API_BASE_URL || "https://api.cricapi.com/v1";
 const ALLOW_MOCK_MATCH_DATA = process.env.ALLOW_MOCK_MATCH_DATA === "true";
 
-interface ApiResponse<T> {
-  apikey: string;
-  data: T;
-  status: string;
-  info: {
-    hitsToday: number;
-    hitsUsed: number;
-    hitsLimit: number;
-  };
+type MatchDataOptions = {
+  fresh?: boolean;
+};
+
+export type MatchDetailBundle = {
+  match: Match | null;
+  scorecard: Scorecard[] | null;
+  commentary: Commentary | null;
+  squads: Squad[] | null;
+  source: "sportmonks" | "mock" | "none";
+};
+
+function isMockMatchId(matchId: string) {
+  return matchId.startsWith("mock-") || matchId.startsWith("cal-");
 }
 
-async function fetchApi<T>(endpoint: string, params: Record<string, string> = {}): Promise<T | null> {
-  try {
-    const url = new URL(`${BASE_URL}/${endpoint}`);
-    url.searchParams.set("apikey", API_KEY);
-    Object.entries(params).forEach(([key, value]) => {
-      url.searchParams.set(key, value);
-    });
-
-    const res = await fetch(url.toString(), {
-      next: { revalidate: 30 },
-    });
-
-    if (!res.ok) {
-      console.error(`API Error: ${res.status} ${res.statusText}`);
-      return null;
-    }
-
-    const json: ApiResponse<T> = await res.json();
-
-    if (json.status !== "success") {
-      console.error(`API returned non-success status`);
-      return null;
-    }
-
-    return json.data;
-  } catch (error) {
-    console.error(`Failed to fetch ${endpoint}:`, error);
-    return null;
-  }
+function shouldUseMockMatchData(matchId: string) {
+  return ALLOW_MOCK_MATCH_DATA && isMockMatchId(matchId);
 }
 
 function dedupeMatches(matches: Match[]): Match[] {
@@ -81,93 +65,147 @@ function sortMatches(matches: Match[]): Match[] {
   });
 }
 
-// Get current/live matches — CricAPI current + broader upcoming + optional series fixtures.
-export async function getLiveMatches(): Promise<Match[]> {
-  // 1. Try CricAPI
-  if (isCricApiKeySet()) {
-    const [currentMatches, scheduledMatches, seriesMatches] = await Promise.all([
-      getCurrentMatches(),
-      getMatches(),
-      isCricApiConfigured() ? getSeriesMatches() : Promise.resolve([]),
+export async function getLiveMatchesWithSource(): Promise<{ matches: Match[]; source: "sportmonks" | "mock" | "none" }> {
+  if (isSportMonksConfigured()) {
+    const [live, upcoming, recent] = await Promise.all([
+      getSMLivescores(),
+      getSMUpcoming(),
+      getSMRecentResults(),
     ]);
 
-    const mergedMatches = dedupeMatches([
-      ...currentMatches,
-      ...seriesMatches,
-      ...scheduledMatches,
+    const merged = dedupeMatches([
+      ...(live ?? []),
+      ...(upcoming ?? []),
+      ...(recent ?? []),
     ]);
 
-    if (mergedMatches.length > 0) return sortMatches(mergedMatches);
-
-    // With a configured API key, prefer an empty state over misleading mock fixtures.
-    return [];
+    if (merged.length > 0) {
+      return {
+        matches: sortMatches(merged),
+        source: "sportmonks",
+      };
+    }
   }
 
-  // 2. Only use mock data when explicitly enabled.
-  return ALLOW_MOCK_MATCH_DATA ? getMockLiveMatches() : [];
+  if (ALLOW_MOCK_MATCH_DATA) {
+    return { matches: getMockLiveMatches(), source: "mock" };
+  }
+
+  return { matches: [], source: "none" };
+}
+
+// Get current/live matches from SportMonks.
+export async function getLiveMatches(): Promise<Match[]> {
+  return (await getLiveMatchesWithSource()).matches;
 }
 
 
 // Get match info by ID
-export async function getMatchInfo(matchId: string): Promise<Match | null> {
-  const data = await fetchApi<Match>("match_info", { id: matchId });
-  return data || getMockMatch(matchId);
+export async function getMatchInfo(matchId: string, options: MatchDataOptions = {}): Promise<Match | null> {
+  if (isSportMonksConfigured()) {
+    const sportMonksMatch = await getSMFixture(matchId, options);
+    if (sportMonksMatch) return sportMonksMatch;
+  }
+
+  return shouldUseMockMatchData(matchId) ? getMockMatch(matchId) : null;
 }
 
 // Get match scorecard
-export async function getMatchScorecard(matchId: string): Promise<Scorecard[] | null> {
+export async function getMatchScorecard(matchId: string, options: MatchDataOptions = {}): Promise<Scorecard[] | null> {
   if (isSportMonksConfigured()) {
-    const sportMonksScorecard = await getSMScorecard(matchId);
+    const sportMonksScorecard = await getSMScorecard(matchId, options);
     if (sportMonksScorecard && sportMonksScorecard.length > 0) {
       return sportMonksScorecard;
     }
   }
 
-  const data = await fetchApi<Scorecard[]>("match_scorecard", { id: matchId });
-  return data || getMockScorecard();
+  return shouldUseMockMatchData(matchId) ? getMockScorecard() : null;
 }
 
 // Get match ball-by-ball commentary
-export async function getMatchCommentary(matchId: string): Promise<Commentary | null> {
-  const data = await fetchApi<Commentary>("match_bbb", { id: matchId });
-  return data || getMockCommentary();
+export async function getMatchCommentary(matchId: string, options: MatchDataOptions = {}): Promise<Commentary | null> {
+  if (isSportMonksConfigured()) {
+    const sportMonksCommentary = await getSMCommentary(matchId, options);
+    if (sportMonksCommentary && sportMonksCommentary.bbb.length > 0) {
+      return sportMonksCommentary;
+    }
+  }
+
+  return shouldUseMockMatchData(matchId) ? getMockCommentary() : null;
 }
 
 // Get match squads
-export async function getMatchSquad(matchId: string): Promise<Squad[] | null> {
-  const data = await fetchApi<Squad[]>("match_squad", { id: matchId });
-  return data || getMockSquads();
+export async function getMatchSquad(matchId: string, options: MatchDataOptions = {}): Promise<Squad[] | null> {
+  if (isSportMonksConfigured()) {
+    const sportMonksSquads = await getSMSquads(matchId, options);
+    if (sportMonksSquads && sportMonksSquads.length > 0) {
+      return sportMonksSquads;
+    }
+  }
+
+  return shouldUseMockMatchData(matchId) ? getMockSquads() : null;
+}
+
+export async function getMatchDetailBundle(
+  matchId: string,
+  options: MatchDataOptions = {}
+): Promise<MatchDetailBundle> {
+  if (shouldUseMockMatchData(matchId)) {
+    return {
+      match: getMockMatch(matchId),
+      scorecard: getMockScorecard(),
+      commentary: getMockCommentary(),
+      squads: getMockSquads(),
+      source: "mock",
+    };
+  }
+
+  if (isSportMonksConfigured()) {
+    const [match, scorecard, commentary, squads] = await Promise.all([
+      getSMFixture(matchId, options),
+      getSMScorecard(matchId, options),
+      getSMCommentary(matchId, options),
+      getSMSquads(matchId, options),
+    ]);
+
+    if (match) {
+      return {
+        match,
+        scorecard,
+        commentary,
+        squads,
+        source: "sportmonks",
+      };
+    }
+  }
+
+  return {
+    match: null,
+    scorecard: null,
+    commentary: null,
+    squads: null,
+    source: "none",
+  };
 }
 
 // Get upcoming matches (calendar)
 export async function getUpcomingMatches(): Promise<CalendarMatch[]> {
-  if (isCricApiKeySet()) {
-    const [seriesMatches, scheduledMatches] = await Promise.all([
-      isCricApiConfigured() ? getSeriesMatches(900) : Promise.resolve([]),
-      getMatches(900),
-    ]);
-
-    const mergedMatches = dedupeMatches([
-      ...(seriesMatches as Match[]),
-      ...(scheduledMatches as Match[]),
-    ]);
-
-    const upcomingMatches = sortMatches(
-      mergedMatches.filter((match) => !match.matchEnded)
-    );
-
-    return upcomingMatches.map((match) => ({
-      id: match.id,
-      name: match.name,
-      matchType: match.matchType,
-      date: match.date,
-      dateTimeGMT: match.dateTimeGMT,
-      teams: match.teams,
-      teamInfo: match.teamInfo,
-      venue: match.venue,
-      status: match.status,
-      series_id: match.series_id,
-    }));
+  if (isSportMonksConfigured()) {
+    const upcoming = await getSMUpcoming();
+    if (upcoming && upcoming.length > 0) {
+      return upcoming.map((match) => ({
+        id: match.id,
+        name: match.name,
+        matchType: match.matchType,
+        date: match.date,
+        dateTimeGMT: match.dateTimeGMT,
+        teams: match.teams,
+        teamInfo: match.teamInfo,
+        venue: match.venue,
+        status: match.status,
+        series_id: match.series_id,
+      }));
+    }
   }
 
   return ALLOW_MOCK_MATCH_DATA ? getMockCalendarMatches() : [];
@@ -175,8 +213,7 @@ export async function getUpcomingMatches(): Promise<CalendarMatch[]> {
 
 // Get series list
 export async function getSeriesList(): Promise<unknown[]> {
-  const data = await fetchApi<unknown[]>("series");
-  return data || [];
+  return [];
 }
 
 // ==================== MOCK DATA ====================

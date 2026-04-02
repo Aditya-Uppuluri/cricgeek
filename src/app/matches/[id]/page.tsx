@@ -1,8 +1,6 @@
 import {
+  getMatchDetailBundle,
   getMatchInfo,
-  getMatchScorecard,
-  getMatchCommentary,
-  getMatchSquad,
 } from "@/lib/cricket-api";
 import { getSMFixture, isSportMonksConfigured } from "@/lib/sportmonks";
 import MatchDetailClient from "./MatchDetailClient";
@@ -35,15 +33,8 @@ export default async function MatchDetailPage({ params, searchParams }: PageProp
       ? requestedTab
       : "scorecard";
 
-  // SportMonks provides match data directly; supplement with CricAPI for scorecard/commentary
-  const [smMatch, scorecard, commentary, squads] = await Promise.all([
-    isSportMonksConfigured() ? getSMFixture(id) : null,
-    getMatchScorecard(id),
-    getMatchCommentary(id),
-    getMatchSquad(id),
-  ]);
-
-  const match = smMatch ?? await getMatchInfo(id);
+  const bundle = await getMatchDetailBundle(id);
+  const match = bundle.match ?? await getMatchInfo(id);
 
 
   if (!match) {
@@ -60,10 +51,11 @@ export default async function MatchDetailPage({ params, searchParams }: PageProp
   return (
     <MatchDetailClient
       match={match}
-      scorecard={scorecard}
-      commentary={commentary}
-      squads={squads}
+      scorecard={bundle.scorecard}
+      commentary={bundle.commentary}
+      squads={bundle.squads}
       initialTab={initialTab}
+      source={bundle.source}
     />
   );
 }
