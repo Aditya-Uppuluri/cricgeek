@@ -3,8 +3,8 @@ import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
 import { hasDeepgramConfigured, transcribeWithDeepgram } from "@/lib/deepgram";
-import { prisma } from "@/lib/db";
-import { getMatchInfo, getMatchSquad } from "@/lib/cricket-api";
+import { getCommentarySessionMatchContext } from "@/lib/commentary-match-context";
+import { correctPlayerNamesInCommentary } from "@/lib/commentary-player-correction";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 const isLocalAiService =
@@ -30,62 +30,6 @@ async function transcribeWithLegacyService(audioFile: File) {
 type TranscriptionPayload = Record<string, unknown> & {
   text?: string;
 };
-
-async function buildMatchKeyterms(sessionId: string | null) {
-  if (!sessionId) {
-    return [];
-  }
-
-  const commentarySession = await prisma.liveCommentarySession.findUnique({
-    where: { id: sessionId },
-    select: {
-      matchId: true,
-      matchName: true,
-      matchType: true,
-    },
-  });
-
-  if (!commentarySession) {
-    return [];
-  }
-
-  const [match, squads] = await Promise.all([
-    getMatchInfo(commentarySession.matchId, { fresh: true }),
-    getMatchSquad(commentarySession.matchId, { fresh: true }),
-  ]);
-
-  const terms = new Set<string>();
-
-  const addTerm = (value?: string | null) => {
-    const term = value?.trim();
-    if (term) {
-      terms.add(term);
-    }
-  };
-
-  addTerm(commentarySession.matchName);
-  addTerm(commentarySession.matchType);
-
-  for (const team of match?.teams ?? []) {
-    addTerm(team);
-  }
-
-  for (const teamInfo of match?.teamInfo ?? []) {
-    addTerm(teamInfo.name);
-    addTerm(teamInfo.shortname);
-  }
-
-  for (const squad of squads ?? []) {
-    addTerm(squad.teamName);
-    addTerm(squad.shortname);
-
-    for (const player of squad.players) {
-      addTerm(player.name);
-    }
-  }
-
-  return [...terms];
-}
 
 // POST /api/commentary/transcribe — proxy audio to Python Whisper service
 export async function POST(request: Request) {
@@ -129,12 +73,12 @@ export async function POST(request: Request) {
 
     let result: TranscriptionPayload;
     let provider = "legacy";
-    const dynamicKeyterms = await buildMatchKeyterms(sessionId);
+    const matchContext = await getCommentarySessionMatchContext(sessionId);
 
     try {
       if (deepgramConfigured) {
         result = await transcribeWithDeepgram(audioFile, {
-          keyterms: dynamicKeyterms,
+          keyterms: matchContext.keyterms,
         });
         provider = "deepgram";
       } else {
@@ -150,12 +94,13 @@ export async function POST(request: Request) {
     }
 
     const rawText = typeof result.text === "string" ? result.text : "";
-    const beautifiedText = await polishCommentaryForSubmission(rawText);
+    const canonicalizedText = correctPlayerNamesInCommentary(rawText, matchContext.playerNames);
+    const beautifiedText = await polishCommentaryForSubmission(canonicalizedText);
 
     return NextResponse.json({
       ...result,
       provider,
-      rawText,
+      rawText: canonicalizedText,
       text: beautifiedText,
     });
   } catch (error) {

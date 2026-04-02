@@ -5,6 +5,8 @@ import { publish } from "@/lib/commentary-pubsub";
 import { canManageCommentarySession } from "@/lib/commentary-permissions";
 import { screenSubmittedWriting } from "@/lib/content-moderation";
 import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
+import { getCommentarySessionMatchContext } from "@/lib/commentary-match-context";
+import { correctPlayerNamesInCommentary } from "@/lib/commentary-player-correction";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -68,7 +70,9 @@ export async function POST(request: Request, { params }: RouteParams) {
     const rawText = typeof body.text === "string" ? body.text.trim() : "";
     const overText = typeof body.overText === "string" ? body.overText.trim() : "";
     const source = body.source;
-    const text = await polishCommentaryForSubmission(rawText);
+    const matchContext = await getCommentarySessionMatchContext(sessionId);
+    const correctedText = correctPlayerNamesInCommentary(rawText, matchContext.playerNames);
+    const text = await polishCommentaryForSubmission(correctedText);
 
     if (!text) {
       return NextResponse.json(
