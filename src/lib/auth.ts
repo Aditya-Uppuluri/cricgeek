@@ -4,6 +4,17 @@ import GoogleProvider from "next-auth/providers/google";
 import bcrypt from "bcryptjs";
 import { prisma } from "./db";
 
+const authUrl = process.env.AUTH_URL || process.env.NEXTAUTH_URL;
+const authSecret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+const trustHost =
+  process.env.AUTH_TRUST_HOST === "true" ||
+  process.env.TRUST_HOST === "true" ||
+  Boolean(process.env.VERCEL) ||
+  Boolean(process.env.VERCEL_ENV) ||
+  Boolean(process.env.VERCEL_URL) ||
+  Boolean(authUrl) ||
+  process.env.NODE_ENV !== "production";
+
 async function ensureOAuthUser(email: string, name?: string | null, image?: string | null) {
   const existingUser = await prisma.user.findUnique({
     where: { email },
@@ -86,10 +97,9 @@ async function ensureOAuthUser(email: string, name?: string | null, image?: stri
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
-  trustHost:
-    process.env.AUTH_TRUST_HOST === "true" ||
-    process.env.TRUST_HOST === "true" ||
-    process.env.NODE_ENV !== "production",
+  trustHost,
+  ...(authUrl ? { basePath: "/api/auth" } : {}),
+  ...(authSecret ? { secret: authSecret } : {}),
   providers: [
     ...(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET
       ? [
