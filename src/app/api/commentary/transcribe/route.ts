@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
-import { beautifyCommentaryText } from "@/lib/commentary-format";
+import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
 
 const AI_SERVICE_URL = process.env.AI_SERVICE_URL || "http://127.0.0.1:8000";
 
@@ -45,7 +45,7 @@ export async function POST(request: Request) {
 
     const result = await response.json();
     const rawText = typeof result?.text === "string" ? result.text : "";
-    const beautifiedText = beautifyCommentaryText(rawText);
+    const beautifiedText = await polishCommentaryForSubmission(rawText);
 
     return NextResponse.json({
       ...result,

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import { Mic, MicOff, Send, Loader2, Pause, Play, StopCircle, Keyboard, Volume2 } from "lucide-react";
-import { beautifyCommentaryText } from "@/lib/commentary-format";
+import { beautifyCommentaryText, finalizeCommentaryText } from "@/lib/commentary-format";
 
 interface Entry {
   id: string;
@@ -136,6 +136,7 @@ export default function ModeratorDashboard({
   const isVoiceSessionActiveRef = useRef(false);
   const finalTranscriptRef = useRef("");
   const interimTranscriptRef = useRef("");
+  const lastRecordedBlobRef = useRef<Blob | null>(null);
 
   const cleanupRecordingResources = useCallback(() => {
     if (animationRef.current) {
@@ -162,7 +163,7 @@ export default function ModeratorDashboard({
       .filter(Boolean)
       .join(" ")
       .trim();
-    setTranscribedText(nextText);
+    setTranscribedText(beautifyCommentaryText(nextText));
   }, []);
 
   // Cleanup on unmount
@@ -178,6 +179,7 @@ export default function ModeratorDashboard({
     setError(null);
     finalTranscriptRef.current = "";
     interimTranscriptRef.current = "";
+    lastRecordedBlobRef.current = null;
     syncTranscriptState();
     try {
       const recognitionCtor = getSpeechRecognitionSupport();
@@ -243,16 +245,23 @@ export default function ModeratorDashboard({
         };
 
         recorder.onstop = async () => {
-          const hadRealtimeTranscript = Boolean(finalTranscriptRef.current.trim() || interimTranscriptRef.current.trim());
+          const fallbackText = [finalTranscriptRef.current, interimTranscriptRef.current]
+            .filter(Boolean)
+            .join(" ")
+            .trim();
           cleanupRecordingResources();
 
-          if (hadRealtimeTranscript || chunksRef.current.length === 0) {
+          if (chunksRef.current.length === 0) {
+            if (fallbackText) {
+              setTranscribedText(finalizeCommentaryText(fallbackText));
+            }
             return;
           }
 
           const blobType = recorder.mimeType || recorderSupport.mimeType || "audio/webm";
           const blob = new Blob(chunksRef.current, { type: blobType });
-          await transcribeAudio(blob);
+          lastRecordedBlobRef.current = blob;
+          await transcribeAudio(blob, { fallbackText });
         };
 
         mediaRecorderRef.current = recorder;
@@ -342,7 +351,7 @@ export default function ModeratorDashboard({
     setIsRecording(false);
   }, [cleanupRecordingResources]);
 
-  const transcribeAudio = async (blob: Blob) => {
+  const transcribeAudio = async (blob: Blob, options?: { fallbackText?: string }) => {
     setIsTranscribing(true);
     setError(null);
     try {
@@ -361,9 +370,17 @@ export default function ModeratorDashboard({
       }
 
       const data = await res.json();
-      setTranscribedText(data.text || beautifyCommentaryText(data.rawText || ""));
+      const cleanedText =
+        finalizeCommentaryText(data.text || data.rawText || "") ||
+        finalizeCommentaryText(options?.fallbackText || "");
+
+      setTranscribedText(cleanedText);
     } catch (err) {
       console.error("Transcription failed:", err);
+      const fallbackText = finalizeCommentaryText(options?.fallbackText || transcribedText);
+      if (fallbackText) {
+        setTranscribedText(fallbackText);
+      }
       setError(err instanceof Error ? err.message : "Transcription failed");
     } finally {
       setIsTranscribing(false);
@@ -371,7 +388,7 @@ export default function ModeratorDashboard({
   };
 
   const postEntry = async () => {
-    const text = beautifyCommentaryText(transcribedText);
+    const text = finalizeCommentaryText(transcribedText);
     if (!text) return;
 
     setIsPosting(true);
@@ -572,7 +589,7 @@ export default function ModeratorDashboard({
               className="w-full px-4 py-3 rounded-xl bg-gray-800 border border-gray-700 text-white placeholder-gray-500 resize-none focus:border-cg-green focus:outline-none transition"
             />
             <p className="mt-2 text-xs text-gray-500">
-              Commentary is auto-polished for readability before posting.
+              Commentary is cleaned for grammar, capitalization, and punctuation before posting.
             </p>
           </div>
 
@@ -586,7 +603,7 @@ export default function ModeratorDashboard({
           {/* Post button */}
           <button
             onClick={postEntry}
-            disabled={!transcribedText.trim() || isPosting || !isLive}
+            disabled={!transcribedText.trim() || isPosting || isRecording || isTranscribing || !isLive}
             className="w-full flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-cg-green text-black font-bold text-sm hover:bg-cg-green-dark transition disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {isPosting ? (

@@ -28,6 +28,13 @@ import ollama_client
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
 
+COMMENTARY_INITIAL_PROMPT = (
+    "This is live English cricket commentary. Common cricket terms include batter, bowler, "
+    "over, innings, yorker, bouncer, good length, slower ball, full toss, leg side, off side, "
+    "midwicket, square leg, fine leg, covers, powerplay, strike rate, and economy. "
+    "Common team abbreviations include IPL, KKR, SRH, CSK, MI, RCB, DC, PBKS, RR, GT, and LSG."
+)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -316,7 +323,14 @@ async def transcribe_audio(audio: UploadFile = File(...)):
             tmp.write(await audio.read())
             tmp_path = tmp.name
 
-        result = model.transcribe(tmp_path, fp16=False)
+        result = model.transcribe(
+            tmp_path,
+            fp16=False,
+            language="en",
+            task="transcribe",
+            temperature=0,
+            initial_prompt=COMMENTARY_INITIAL_PROMPT,
+        )
         duration_ms = int((time.time() - start) * 1000)
 
         return {

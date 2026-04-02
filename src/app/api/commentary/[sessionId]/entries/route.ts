@@ -4,6 +4,7 @@ import { auth } from "@/lib/auth";
 import { publish } from "@/lib/commentary-pubsub";
 import { canManageCommentarySession } from "@/lib/commentary-permissions";
 import { screenSubmittedWriting } from "@/lib/content-moderation";
+import { polishCommentaryForSubmission } from "@/lib/commentary-polish";
 
 interface RouteParams {
   params: Promise<{ sessionId: string }>;
@@ -64,9 +65,10 @@ export async function POST(request: Request, { params }: RouteParams) {
 
   try {
     const body = await request.json();
-    const text = typeof body.text === "string" ? body.text.trim() : "";
+    const rawText = typeof body.text === "string" ? body.text.trim() : "";
     const overText = typeof body.overText === "string" ? body.overText.trim() : "";
     const source = body.source;
+    const text = await polishCommentaryForSubmission(rawText);
 
     if (!text) {
       return NextResponse.json(
