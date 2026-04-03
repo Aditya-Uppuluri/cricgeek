@@ -9,6 +9,7 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
 type CommentaryPolishOptions = {
   playerNames?: string[];
+  keyterms?: string[];
   preNormalizedText?: string;
 };
 
@@ -24,8 +25,29 @@ function buildSystemPrompt(options?: CommentaryPolishOptions) {
     options?.playerNames && options.playerNames.length > 0
       ? ` Valid player names for this match: ${options.playerNames.join(", ")}. You must treat player-name repair as part of the job. If the commentary contains a garbled proper noun, initials, partial name, or a close misspelling that likely refers to one of these players, rewrite it to the closest valid player name from the list. If a capitalized phrase looks like a player but is not exactly correct, choose the nearest valid squad player. If initials like "AR", "A Raghu", "V Chakrabarthy", or similar appear, expand them to the most likely unique squad player.`
       : "";
+  const keytermContext =
+    options?.keyterms && options.keyterms.length > 0
+      ? ` Match context terms: ${options.keyterms.join(", ")}.`
+      : "";
 
-  return `You are a fast finalizer for live cricket commentary. Fix grammar, punctuation, capitalization, readability, and player-name recognition. Preserve the meaning, tone, and cricket facts. Keep team abbreviations like KKR and SRH uppercase. Do not add new facts, players, or stats.${playerContext} Return only the final corrected commentary text.`;
+  return `You are a fast finalizer for live cricket commentary.
+
+Your job is to make the transcript publish-ready while staying very close to what the speaker actually said.
+
+Rules:
+- Make minimal edits.
+- Fix grammar, punctuation, capitalization, and obvious speech-to-text mistakes.
+- Remove accidental repetition, filler fragments, and false starts only when they are clearly unintended.
+- Preserve the meaning, tone, and cricket facts.
+- Do not add new facts, new opinions, or new players.
+- Do not replace unclear words with unrelated words.
+- If a phrase is uncertain, prefer the closest cricket proper noun over an unrelated rewrite.
+- Do not delete a named entity just because it is not in the current squad.
+- If a likely cricketer or cricket proper noun is spoken imperfectly, repair it from general cricket knowledge when confidence is high. For example, "Boombra" should usually become "Bumrah".
+- Keep team abbreviations like KKR and SRH uppercase.
+${playerContext}${keytermContext}
+
+Return only one final corrected commentary line.`;
 }
 
 function buildUserPrompt(input: string, fallback: string, options?: CommentaryPolishOptions) {
@@ -34,7 +56,11 @@ function buildUserPrompt(input: string, fallback: string, options?: CommentaryPo
       ? `Reference normalization:\n${options.preNormalizedText}\n\n`
       : "";
 
-  return `Raw transcript:\n${input}\n\n${normalizedHint}Light cleanup baseline:\n${fallback}\n\nReturn one final commentary line with corrected names, grammar, punctuation, and capitalization.`;
+  return `Raw transcript:\n${input}\n\n${normalizedHint}Light cleanup baseline:\n${fallback}\n\nProduce a lightly refined final line that:
+- sticks closely to the raw speech
+- fixes grammar and punctuation
+- removes obvious accidental repetition
+- preserves or repairs cricket names instead of dropping them`;
 }
 
 export async function polishCommentaryForSubmission(

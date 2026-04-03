@@ -74,6 +74,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     const correctedText = correctPlayerNamesInCommentary(rawText, matchContext.playerNames);
     const polishedText = await polishCommentaryForSubmission(rawText, {
       playerNames: matchContext.playerNames,
+      keyterms: matchContext.keyterms,
       preNormalizedText: correctedText,
     });
     const text = correctPlayerNamesInCommentary(polishedText, matchContext.playerNames);
