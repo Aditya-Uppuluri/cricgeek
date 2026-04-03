@@ -50,6 +50,7 @@ next-env.d.ts
 
 # Python virtual environments
 ai_service/venv/
+venv/
 
 # Python cache / bytecode
 __pycache__/

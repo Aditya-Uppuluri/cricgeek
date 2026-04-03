@@ -9,6 +9,7 @@ const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
 type CommentaryPolishOptions = {
   playerNames?: string[];
+  preNormalizedText?: string;
 };
 
 function normalizeModelOutput(text: string): string {
@@ -21,10 +22,19 @@ function normalizeModelOutput(text: string): string {
 function buildSystemPrompt(options?: CommentaryPolishOptions) {
   const playerContext =
     options?.playerNames && options.playerNames.length > 0
-      ? ` Valid player names for this match: ${options.playerNames.join(", ")}. If the commentary contains a garbled proper noun, initials, or a close misspelling that clearly refers to one of these players, rewrite it to the closest valid player name from the list.`
+      ? ` Valid player names for this match: ${options.playerNames.join(", ")}. You must treat player-name repair as part of the job. If the commentary contains a garbled proper noun, initials, partial name, or a close misspelling that likely refers to one of these players, rewrite it to the closest valid player name from the list. If a capitalized phrase looks like a player but is not exactly correct, choose the nearest valid squad player. If initials like "AR", "A Raghu", "V Chakrabarthy", or similar appear, expand them to the most likely unique squad player.`
       : "";
 
-  return `You are a fast copy editor for live cricket commentary. Fix grammar, punctuation, capitalization, and readability. Preserve the meaning, tone, and cricket facts. Keep team abbreviations like KKR and SRH uppercase. Do not add new facts, players, or stats.${playerContext} Return only the polished commentary text.`;
+  return `You are a fast finalizer for live cricket commentary. Fix grammar, punctuation, capitalization, readability, and player-name recognition. Preserve the meaning, tone, and cricket facts. Keep team abbreviations like KKR and SRH uppercase. Do not add new facts, players, or stats.${playerContext} Return only the final corrected commentary text.`;
+}
+
+function buildUserPrompt(input: string, fallback: string, options?: CommentaryPolishOptions) {
+  const normalizedHint =
+    options?.preNormalizedText && options.preNormalizedText !== fallback
+      ? `Reference normalization:\n${options.preNormalizedText}\n\n`
+      : "";
+
+  return `Raw transcript:\n${input}\n\n${normalizedHint}Light cleanup baseline:\n${fallback}\n\nReturn one final commentary line with corrected names, grammar, punctuation, and capitalization.`;
 }
 
 export async function polishCommentaryForSubmission(
@@ -49,6 +59,9 @@ export async function polishCommentaryForSubmission(
         model: OLLAMA_MODEL,
         think: false,
         stream: false,
+        options: {
+          temperature: 0,
+        },
         messages: [
           {
             role: "system",
@@ -56,7 +69,7 @@ export async function polishCommentaryForSubmission(
           },
           {
             role: "user",
-            content: fallback,
+            content: buildUserPrompt(input, fallback, options),
           },
         ],
       }),

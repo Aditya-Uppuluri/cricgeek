@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Wifi, WifiOff, ChevronDown } from "lucide-react";
+import { Wifi, WifiOff, ChevronDown, Clock3 } from "lucide-react";
 
 interface Entry {
   id: string;
@@ -148,9 +148,12 @@ export default function LiveCommentaryFeed({
                   )}
                   <div className="flex-1 min-w-0">
                     <p className="text-white text-sm leading-relaxed">{entry.text}</p>
-                    <div className="flex items-center gap-2 mt-1.5">
-                      <span className="text-gray-600 text-xs">
-                        {new Date(entry.createdAt).toLocaleTimeString("en-IN", {
+                    <div className="flex items-center gap-2 mt-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1 rounded-full border border-gray-700 bg-gray-800/80 px-2 py-0.5 text-xs text-gray-300">
+                        <Clock3 size={11} />
+                        {new Date(entry.createdAt).toLocaleString("en-IN", {
+                          day: "2-digit",
+                          month: "short",
                           hour: "2-digit",
                           minute: "2-digit",
                           second: "2-digit",
