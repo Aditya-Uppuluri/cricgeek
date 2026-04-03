@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { forwardAiService } from "@/lib/ai-service";
+import { forwardInsightsService } from "@/lib/ai-service";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const query = url.searchParams.toString();
-    const upstream = await forwardAiService(
+    const upstream = await forwardInsightsService(
       `/t20-insights/evaluation${query ? `?${query}` : ""}`
     );
 
@@ -19,7 +19,12 @@ export async function GET(request: Request) {
   } catch (error) {
     console.error("Insights evaluation proxy error:", error);
     return NextResponse.json(
-      { error: "Unable to reach the T20 insights service" },
+      {
+        error:
+          process.env.NODE_ENV === "production"
+            ? "Unable to reach the T20 insights service"
+            : "Unable to reach the T20 insights service. Start it with `npm run dev:insights`.",
+      },
       { status: 502 }
     );
   }

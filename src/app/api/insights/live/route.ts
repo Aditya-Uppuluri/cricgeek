@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { forwardAiService } from "@/lib/ai-service";
+import { forwardInsightsService } from "@/lib/ai-service";
 import { getMatchInfo } from "@/lib/cricket-api";
 import type { Match, Score } from "@/types/cricket";
 
@@ -82,7 +82,7 @@ export async function GET(request: Request) {
     }
 
     const state = deriveLiveState(match);
-    const upstream = await forwardAiService("/t20-insights/advisor", {
+    const upstream = await forwardInsightsService("/t20-insights/advisor", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -121,10 +121,16 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error("Insights live proxy error:", error);
+    const detail =
+      error instanceof Error ? error.message : "Unable to derive live match context.";
+    const isLocalInsightsConnectionIssue =
+      process.env.NODE_ENV !== "production" && /fetch failed|ECONNREFUSED/i.test(detail);
+
     return NextResponse.json(
       {
-        error:
-          error instanceof Error ? error.message : "Unable to derive live match context.",
+        error: isLocalInsightsConnectionIssue
+          ? "Unable to reach the T20 insights service. Start it with `npm run dev:insights`."
+          : detail,
       },
       { status: 502 }
     );
