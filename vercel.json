@@ -3,11 +3,13 @@
   "experimentalServices": {
     "web": {
       "entrypoint": ".",
-      "routePrefix": "/"
+      "routePrefix": "/",
+      "framework": "nextjs"
     },
     "insights": {
       "entrypoint": "insights_service/main.py",
       "routePrefix": "/_insights",
+      "framework": "fastapi",
       "memory": 2048,
       "maxDuration": 120,
       "includeFiles": [
