@@ -16,10 +16,12 @@ import {
   Trophy,
   LogOut,
   ChevronDown,
+  BrainCircuit,
 } from "lucide-react";
 
 const navLinks = [
   { href: "/matches", label: "Live Matches", icon: Zap },
+  { href: "/insights", label: "AI Insights", icon: BrainCircuit },
   { href: "/commentary", label: "Commentary", icon: Radio },
   { href: "/calendar", label: "Calendar", icon: Calendar },
   { href: "/blog", label: "Community", icon: PenSquare },

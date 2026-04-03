@@ -271,18 +271,17 @@ export default function MatchDetailClient({
               </div>
               <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-6">
                 <h3 className="text-lg font-bold text-white mb-2">
-                  Post-Match Analysis
+                  AI Insights
                 </h3>
                 <p className="text-gray-400 text-sm">
-                  Post-match analysis now includes innings fingerprints, scorecard-derived
-                  EDA cards, batting and bowling impact tables, match signals, and
-                  tactical takeaways.
+                  Open the integrated T20 decision-support view for live recommendations,
+                  model evaluation, and player explorer tooling using CricGeek match context.
                 </p>
                 <Link
-                  href={`/matches/${liveMatch.id}/analysis`}
+                  href={`/insights?matchId=${encodeURIComponent(liveMatch.id)}`}
                   className="mt-4 inline-flex rounded-lg border border-gray-700 bg-white/5 px-3 py-2 text-xs font-bold text-white hover:bg-white/10"
                 >
-                  Open Post-Match Analysis
+                  Open AI Insights
                 </Link>
               </div>
             </div>
@@ -321,6 +320,12 @@ export default function MatchDetailClient({
                 className="block rounded-lg bg-cg-green/10 px-3 py-2 text-center text-xs font-semibold text-cg-green hover:bg-cg-green/20"
               >
                 Post-Match Analysis Page
+              </Link>
+              <Link
+                href={`/insights?matchId=${encodeURIComponent(liveMatch.id)}`}
+                className="block rounded-lg bg-white/5 px-3 py-2 text-center text-xs font-semibold text-white hover:bg-white/10"
+              >
+                AI Insights Page
               </Link>
             </div>
           </div>

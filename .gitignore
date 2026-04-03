@@ -56,3 +56,19 @@ venv/
 __pycache__/
 *.py[cod]
 .env*.local
+
+# Capstone Cric runtime packaging
+capstone\ cric/*
+!capstone\ cric/cricket_metrics.py
+!capstone\ cric/evaluator.py
+!capstone\ cric/outputs/
+capstone\ cric/outputs/*
+!capstone\ cric/outputs/aggregated_df.pkl
+!capstone\ cric/outputs/bowling_over_df.pkl
+!capstone\ cric/outputs/entries_with_perf.pkl
+!capstone\ cric/outputs/eval_results.pkl
+!capstone\ cric/outputs/player_gender_map.pkl
+!capstone\ cric/outputs/player_image_urls.json
+!capstone\ cric/outputs/player_team_map.json
+!capstone\ cric/outputs/team_players_map.json
+!capstone\ cric/outputs/teams_list.pkl

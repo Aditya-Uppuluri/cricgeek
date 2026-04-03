@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Zap, Calendar, PenSquare, TrendingUp, ArrowRight, Trophy } from "lucide-react";
+import { Zap, Calendar, PenSquare, TrendingUp, ArrowRight, Trophy, BrainCircuit } from "lucide-react";
 import LiveMatchCard from "@/components/matches/LiveMatchCard";
 import AdSlot from "@/components/ads/AdSlot";
 import { getLiveMatches } from "@/lib/cricket-api";
@@ -61,6 +61,13 @@ export default async function HomePage() {
               >
                 <PenSquare size={18} />
                 Write a Blog
+              </Link>
+              <Link
+                href="/insights"
+                className="bg-white/5 text-white px-6 py-3 rounded-xl font-medium text-sm hover:bg-white/10 transition-all border border-gray-700 inline-flex items-center gap-2"
+              >
+                <BrainCircuit size={18} />
+                AI Insights
               </Link>
             </div>
           </div>
@@ -143,6 +150,7 @@ export default async function HomePage() {
             { icon: TrendingUp, title: "Expert Analysis", desc: "Pre-match and post-match analysis from cricket experts" },
             { icon: PenSquare, title: "Community Blogs", desc: "Share your cricket views and engage with fellow fans" },
             { icon: Calendar, title: "Match Calendar", desc: "Never miss a match with our complete cricket calendar" },
+            { icon: BrainCircuit, title: "AI Insights", desc: "Integrated T20 decision support, evaluation, and player explorer tools" },
           ].map((feature) => (
             <div key={feature.title} className="bg-cg-dark-2 border border-gray-800 rounded-xl p-5 hover:border-cg-green/30 transition-all">
               <feature.icon size={24} className="text-cg-green mb-3" />

@@ -12,6 +12,10 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    "venv/**",
+    "ai_service/venv/**",
+    "capstone cric/.venv/**",
+    "capstone cric/**/site-packages/**",
   ]),
 ]);
 
