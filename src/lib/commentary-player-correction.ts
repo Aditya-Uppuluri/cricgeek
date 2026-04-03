@@ -626,6 +626,35 @@ function chooseBestSpanMatch(spanTokens: WordToken[], players: PlayerEntry[]) {
     return initialPatternMatch;
   }
 
+  const uniqueFirstNameMatch = players.find((player) => {
+    if (!player.uniqueFirstName) return false;
+
+    const firstNameScore = Math.max(
+      similarity(spanFirst, player.firstName),
+      prefixSimilarity(spanFirst, player.firstName),
+      similarity(phoneticForm(spanFirst), phoneticForm(player.firstName))
+    );
+
+    const tailScore = Math.max(
+      similarity(spanLast, player.lastName),
+      prefixSimilarity(spanLast, player.lastName),
+      similarity(phoneticForm(spanLast), phoneticForm(player.lastName))
+    );
+
+    if (firstNameScore >= 0.97) {
+      return true;
+    }
+
+    return firstNameScore >= 0.92 && tailScore >= 0.28;
+  });
+
+  if (uniqueFirstNameMatch) {
+    return {
+      player: uniqueFirstNameMatch,
+      score: 1.05,
+    };
+  }
+
   let best: { player: PlayerEntry; score: number } | null = null;
 
   for (const player of players) {
@@ -647,6 +676,14 @@ function chooseBestSpanMatch(spanTokens: WordToken[], players: PlayerEntry[]) {
       firstPrefixScore * 0.03 +
       surnamePhoneticScore * 0.01 +
       firstPhoneticScore * 0.01;
+
+    if (player.uniqueFirstName && firstScore >= 0.88) {
+      score += 0.18;
+    }
+
+    if (player.uniqueLastName && surnameScore >= 0.88) {
+      score += 0.18;
+    }
 
     const exactInitials = Boolean(spanInitials && spanInitials === player.initialsKey);
     const firstInitialMatch = isInitialToken(spanFirst) && spanFirst === player.firstInitial;
@@ -690,6 +727,51 @@ function chooseBestSpanMatch(spanTokens: WordToken[], players: PlayerEntry[]) {
   }
 
   return best;
+}
+
+function applyProperNounPhraseCorrections(text: string, players: PlayerEntry[]) {
+  const properNounPhrasePattern = /\b([A-Z][a-z'’-]+(?:\s+[A-Z][a-z'’-]+){1,2})\b/g;
+
+  return text.replace(properNounPhrasePattern, (match) => {
+    const rawWords = match.split(/\s+/).filter(Boolean);
+    const firstWordNormalized = normalizeToken(rawWords[0] || "");
+
+    const uniqueFirstWordPlayer = players.find((player) => {
+      if (!player.uniqueFirstName) return false;
+
+      const score = Math.max(
+        similarity(firstWordNormalized, player.firstName),
+        prefixSimilarity(firstWordNormalized, player.firstName),
+        similarity(phoneticForm(firstWordNormalized), phoneticForm(player.firstName))
+      );
+
+      return score >= 0.95;
+    });
+
+    if (uniqueFirstWordPlayer) {
+      return uniqueFirstWordPlayer.canonical;
+    }
+
+    const tokens = rawWords.map((value) => ({
+      value,
+      normalized: normalizeToken(value),
+      start: 0,
+      end: 0,
+      isCapitalized: /^[A-Z]/.test(value),
+      isAllCaps: value === value.toUpperCase(),
+    }));
+
+    const best = chooseBestSpanMatch(tokens, players);
+    if (!best) {
+      return match;
+    }
+
+    if (best.score < 0.78) {
+      return match;
+    }
+
+    return best.player.canonical;
+  });
 }
 
 function collectSpanReplacements(text: string, tokens: WordToken[], players: PlayerEntry[], aliasIndex: Map<string, PlayerEntry | null>) {
@@ -834,6 +916,7 @@ export function correctPlayerNamesInCommentary(text: string, playerNames: string
   let corrected = applyManualAliasCorrections(text, playerNames);
   corrected = applyGeneratedPatternCorrections(corrected, players);
   corrected = applyCallbackInitialCorrections(corrected, players);
+  corrected = applyProperNounPhraseCorrections(corrected, players);
   let tokens = tokenizeWords(corrected);
   corrected = collectSpanReplacements(corrected, tokens, players, aliasIndex);
 
