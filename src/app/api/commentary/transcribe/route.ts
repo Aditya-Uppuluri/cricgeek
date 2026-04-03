@@ -95,7 +95,9 @@ export async function POST(request: Request) {
 
     const rawText = typeof result.text === "string" ? result.text : "";
     const canonicalizedText = correctPlayerNamesInCommentary(rawText, matchContext.playerNames);
-    const beautifiedText = await polishCommentaryForSubmission(canonicalizedText);
+    const beautifiedText = await polishCommentaryForSubmission(canonicalizedText, {
+      playerNames: matchContext.playerNames,
+    });
     const finalText = correctPlayerNamesInCommentary(beautifiedText, matchContext.playerNames);
 
     return NextResponse.json({

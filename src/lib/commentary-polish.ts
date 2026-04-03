@@ -7,6 +7,10 @@ const COMMENTARY_POLISH_TIMEOUT_MS = 4_500;
 const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
+type CommentaryPolishOptions = {
+  playerNames?: string[];
+};
+
 function normalizeModelOutput(text: string): string {
   return text
     .replace(/^["'`\s]+|["'`\s]+$/g, "")
@@ -14,7 +18,19 @@ function normalizeModelOutput(text: string): string {
     .trim();
 }
 
-export async function polishCommentaryForSubmission(input: string): Promise<string> {
+function buildSystemPrompt(options?: CommentaryPolishOptions) {
+  const playerContext =
+    options?.playerNames && options.playerNames.length > 0
+      ? ` Valid player names for this match: ${options.playerNames.join(", ")}. If the commentary contains a garbled proper noun, initials, or a close misspelling that clearly refers to one of these players, rewrite it to the closest valid player name from the list.`
+      : "";
+
+  return `You are a fast copy editor for live cricket commentary. Fix grammar, punctuation, capitalization, and readability. Preserve the meaning, tone, and cricket facts. Keep team abbreviations like KKR and SRH uppercase. Do not add new facts, players, or stats.${playerContext} Return only the polished commentary text.`;
+}
+
+export async function polishCommentaryForSubmission(
+  input: string,
+  options?: CommentaryPolishOptions
+): Promise<string> {
   const fallback = finalizeCommentaryText(input);
 
   if (!fallback) {
@@ -36,8 +52,7 @@ export async function polishCommentaryForSubmission(input: string): Promise<stri
         messages: [
           {
             role: "system",
-            content:
-              "You are a fast copy editor for live cricket commentary. Fix grammar, punctuation, capitalization, and readability. Preserve the meaning, tone, and cricket facts. Keep team abbreviations like KKR and SRH uppercase. Do not add new facts, players, or stats. Return only the polished commentary text.",
+            content: buildSystemPrompt(options),
           },
           {
             role: "user",

@@ -11,9 +11,18 @@ type PlayerEntry = {
   canonical: string;
   tokens: string[];
   normalizedTokens: string[];
+  phoneticTokens: string[];
   normalizedJoined: string;
   phoneticJoined: string;
-  phoneticTokens: string[];
+  firstName: string;
+  lastName: string;
+  firstInitial: string;
+  lastInitial: string;
+  initialsKey: string;
+  uniqueFirstName: boolean;
+  uniqueLastName: boolean;
+  uniqueInitials: boolean;
+  aliasKeys: string[];
 };
 
 type Replacement = {
@@ -24,6 +33,46 @@ type Replacement = {
 };
 
 const LOWERCASE_NAME_CONNECTORS = new Set(["de", "da", "di", "van", "von", "bin", "al"]);
+
+const COMMON_NON_NAME_WORDS = new Set([
+  "a",
+  "after",
+  "ball",
+  "balls",
+  "batting",
+  "bowling",
+  "boundary",
+  "boundaries",
+  "cricket",
+  "drive",
+  "field",
+  "innings",
+  "line",
+  "length",
+  "match",
+  "midwicket",
+  "off",
+  "on",
+  "over",
+  "overs",
+  "pitch",
+  "play",
+  "powerplay",
+  "run",
+  "runs",
+  "score",
+  "shot",
+  "single",
+  "six",
+  "strike",
+  "sweep",
+  "team",
+  "the",
+  "throw",
+  "wicket",
+  "wickets",
+  "yorker",
+]);
 
 const MANUAL_ALIAS_OVERRIDES: Record<string, string[]> = {
   "Angkrish Raghuvanshi": [
@@ -126,6 +175,27 @@ function similarity(left: string, right: string) {
   return 1 - levenshtein(left, right) / maxLength;
 }
 
+function prefixSimilarity(left: string, right: string) {
+  if (!left || !right) return 0;
+
+  let matchLength = 0;
+  const maxCheck = Math.min(left.length, right.length);
+
+  while (matchLength < maxCheck && left[matchLength] === right[matchLength]) {
+    matchLength += 1;
+  }
+
+  return matchLength / Math.min(left.length, right.length);
+}
+
+function buildInitialsKey(tokens: string[]) {
+  return tokens
+    .map(normalizeToken)
+    .filter((token) => token && !LOWERCASE_NAME_CONNECTORS.has(token))
+    .map((token) => token[0])
+    .join("");
+}
+
 function tokenizeWords(text: string): WordToken[] {
   const matches = text.matchAll(/[A-Za-z][A-Za-z'’-]*/g);
   const tokens: WordToken[] = [];
@@ -147,87 +217,255 @@ function tokenizeWords(text: string): WordToken[] {
   return tokens;
 }
 
+function isInitialToken(token: WordToken | string) {
+  const value = typeof token === "string" ? normalizeToken(token) : token.normalized;
+  return value.length === 1;
+}
+
+function isNameishToken(token: WordToken) {
+  return token.isCapitalized || token.isAllCaps || isInitialToken(token) || LOWERCASE_NAME_CONNECTORS.has(token.normalized);
+}
+
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function buildAliasKey(firstPart: string, secondPart?: string) {
+  return normalizeToken(`${firstPart}${secondPart ?? ""}`);
+}
+
 function buildPlayerEntries(playerNames: string[]) {
-  return playerNames
+  const firstNameCounts = new Map<string, number>();
+  const lastNameCounts = new Map<string, number>();
+  const initialsCounts = new Map<string, number>();
+
+  const baseEntries = playerNames
     .map((name) => {
       const tokens = name.split(/\s+/).filter(Boolean);
       const normalizedTokens = tokens.map(normalizeToken).filter(Boolean);
       const phoneticTokens = tokens.map(phoneticForm).filter(Boolean);
+      if (normalizedTokens.length === 0) return null;
+
+      const nonConnectorTokens = normalizedTokens.filter((token) => !LOWERCASE_NAME_CONNECTORS.has(token));
+      const firstName = nonConnectorTokens[0] || normalizedTokens[0];
+      const lastName = nonConnectorTokens[nonConnectorTokens.length - 1] || normalizedTokens[normalizedTokens.length - 1];
+      const initialsKey = buildInitialsKey(tokens);
+
+      firstNameCounts.set(firstName, (firstNameCounts.get(firstName) || 0) + 1);
+      lastNameCounts.set(lastName, (lastNameCounts.get(lastName) || 0) + 1);
+      if (initialsKey) {
+        initialsCounts.set(initialsKey, (initialsCounts.get(initialsKey) || 0) + 1);
+      }
 
       return {
         canonical: name,
         tokens,
         normalizedTokens,
+        phoneticTokens,
         normalizedJoined: normalizedTokens.join(""),
         phoneticJoined: phoneticTokens.join(""),
-        phoneticTokens,
-      } satisfies PlayerEntry;
+        firstName,
+        lastName,
+        firstInitial: firstName[0] || "",
+        lastInitial: lastName[0] || "",
+        initialsKey,
+      };
     })
-    .filter((player) => player.tokens.length > 0);
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+  return baseEntries.map((entry) => {
+    const aliasKeys = new Set<string>();
+    aliasKeys.add(entry.normalizedJoined);
+
+    const surnamePrefixes = Array.from({ length: Math.max(0, Math.min(8, entry.lastName.length) - 3) }, (_, index) =>
+      entry.lastName.slice(0, index + 4)
+    );
+    const firstNamePrefixes = Array.from({ length: Math.max(0, Math.min(8, entry.firstName.length) - 2) }, (_, index) =>
+      entry.firstName.slice(0, index + 3)
+    );
+
+    aliasKeys.add(buildAliasKey(entry.firstInitial, entry.lastName));
+    aliasKeys.add(buildAliasKey(entry.firstInitial, entry.normalizedTokens.slice(1).join("")));
+    aliasKeys.add(buildAliasKey(entry.firstName, entry.lastInitial));
+    aliasKeys.add(buildAliasKey(entry.firstInitial, entry.lastInitial));
+
+    for (const prefix of surnamePrefixes) {
+      aliasKeys.add(buildAliasKey(entry.firstInitial, prefix));
+    }
+
+    for (const prefix of firstNamePrefixes) {
+      aliasKeys.add(buildAliasKey(prefix, entry.lastInitial));
+    }
+
+    if ((firstNameCounts.get(entry.firstName) || 0) === 1) {
+      aliasKeys.add(entry.firstName);
+    }
+
+    if ((lastNameCounts.get(entry.lastName) || 0) === 1) {
+      aliasKeys.add(entry.lastName);
+    }
+
+    for (const alias of MANUAL_ALIAS_OVERRIDES[entry.canonical] ?? []) {
+      aliasKeys.add(normalizeToken(alias));
+    }
+
+    return {
+      ...entry,
+      uniqueFirstName: (firstNameCounts.get(entry.firstName) || 0) === 1,
+      uniqueLastName: (lastNameCounts.get(entry.lastName) || 0) === 1,
+      uniqueInitials: entry.initialsKey ? (initialsCounts.get(entry.initialsKey) || 0) === 1 : false,
+      aliasKeys: [...aliasKeys].filter(Boolean),
+    } satisfies PlayerEntry;
+  });
 }
 
-function chooseBestSpanMatch(
-  spanTokens: WordToken[],
-  players: PlayerEntry[],
-  requireProperNoun: boolean
-) {
-  const spanNormalized = spanTokens.map((token) => token.normalized).filter(Boolean);
-  const spanJoined = spanNormalized.join("");
-  if (!spanJoined) {
-    return null;
-  }
-
-  const spanPhoneticJoined = spanNormalized.map(phoneticForm).join("");
-  const isProperNoun = spanTokens.some((token) => token.isCapitalized || token.isAllCaps);
-  const allTokensLookNameLike = spanTokens.every(
-    (token) => token.isCapitalized || token.isAllCaps || LOWERCASE_NAME_CONNECTORS.has(token.normalized)
-  );
-
-  if (requireProperNoun && (!isProperNoun || !allTokensLookNameLike)) {
-    return null;
-  }
-
-  let best: { player: PlayerEntry; score: number } | null = null;
+function buildAliasIndex(players: PlayerEntry[]) {
+  const aliasIndex = new Map<string, PlayerEntry | null>();
 
   for (const player of players) {
-    const tokenDistance = Math.abs(spanTokens.length - player.tokens.length);
-    if (tokenDistance > 1) continue;
-
-    const joinedScore = similarity(spanJoined, player.normalizedJoined);
-    const phoneticScore = similarity(spanPhoneticJoined, player.phoneticJoined);
-    const surnameScore = similarity(
-      spanNormalized[spanNormalized.length - 1] || "",
-      player.normalizedTokens[player.normalizedTokens.length - 1] || ""
-    );
-
-    const averageTokenScore =
-      player.normalizedTokens.length > 0
-        ? player.normalizedTokens.reduce((total, playerToken, index) => {
-            const spanToken = spanNormalized[index] || spanNormalized[spanNormalized.length - 1] || "";
-            return total + similarity(spanToken, playerToken);
-          }, 0) / player.normalizedTokens.length
-        : 0;
-
-    const score = Math.max(
-      joinedScore,
-      (joinedScore + phoneticScore) / 2,
-      (averageTokenScore + surnameScore) / 2
-    );
-
-    const threshold = isProperNoun ? 0.72 : 0.82;
-    const strongEnough =
-      score >= threshold ||
-      (phoneticScore >= 0.9 && surnameScore >= 0.78) ||
-      (joinedScore >= 0.7 && surnameScore >= 0.9);
-
-    if (!strongEnough) continue;
-
-    if (!best || score > best.score) {
-      best = { player, score };
+    for (const aliasKey of player.aliasKeys) {
+      const existing = aliasIndex.get(aliasKey);
+      if (!existing) {
+        aliasIndex.set(aliasKey, player);
+      } else if (existing.canonical !== player.canonical) {
+        aliasIndex.set(aliasKey, null);
+      }
     }
   }
 
-  return best;
+  return aliasIndex;
+}
+
+function buildLooseTokenPattern(token: string) {
+  const normalized = normalizeToken(token);
+
+  if (!normalized) {
+    return "";
+  }
+
+  if (LOWERCASE_NAME_CONNECTORS.has(normalized)) {
+    return escapeRegExp(normalized);
+  }
+
+  const stem = normalized.slice(0, Math.min(4, normalized.length));
+  const fragment = [...stem]
+    .map((character, index) => {
+      if (index === 0) {
+        if ("ckq".includes(character)) return "[ckq]";
+        if ("vw".includes(character)) return "[vw]";
+        if ("sz".includes(character)) return "[sz]";
+        if ("gj".includes(character)) return "[gj]";
+      }
+
+      if ("ckq".includes(character)) return "[ckq]";
+      if ("vw".includes(character)) return "[vw]";
+      if ("sz".includes(character)) return "[sz]";
+      return escapeRegExp(character);
+    })
+    .join("");
+
+  return `${fragment}[a-z'’-]*`;
+}
+
+function applyGeneratedPatternCorrections(text: string, players: PlayerEntry[]) {
+  let nextText = text;
+
+  for (const player of players) {
+    const tailPattern = player.tokens
+      .slice(1)
+      .map(buildLooseTokenPattern)
+      .filter(Boolean)
+      .join("\\s+");
+
+    if (player.firstInitial && tailPattern) {
+      const initialAndTail = new RegExp(`\\b${player.firstInitial}\\.?(?:\\s+${tailPattern})\\b`, "gi");
+      nextText = nextText.replace(initialAndTail, player.canonical);
+    }
+
+    if (player.lastInitial) {
+      const firstPattern = buildLooseTokenPattern(player.tokens[0] || "");
+      if (firstPattern) {
+        const firstAndLastInitial = new RegExp(`\\b${firstPattern}\\s+${player.lastInitial}\\.?(?=\\b)`, "gi");
+        nextText = nextText.replace(firstAndLastInitial, player.canonical);
+      }
+    }
+
+    if (player.uniqueInitials && player.initialsKey.length >= 2) {
+      const initialsPattern = player.initialsKey
+        .split("")
+        .map((initial) => `${initial}\\.?`)
+        .join("\\s*");
+      const initialsRegex = new RegExp(`\\b${initialsPattern}\\b`, "gi");
+      nextText = nextText.replace(initialsRegex, player.canonical);
+    }
+  }
+
+  return nextText;
+}
+
+function applyCallbackInitialCorrections(text: string, players: PlayerEntry[]) {
+  const firstInitialPattern = /\b([A-Z])\.?\s+((?:[A-Z][a-z'’-]*|de|da|di|van|von|bin|al)(?:\s+(?:[A-Z][a-z'’-]*|de|da|di|van|von|bin|al)){0,2})\b/g;
+  const firstNameLastInitialPattern = /\b([A-Z][a-z'’-]{2,})\s+([A-Z])\.?\b/g;
+
+  let nextText = text.replace(firstInitialPattern, (match, initial: string, tail: string) => {
+    const normalizedInitial = normalizeToken(initial);
+    const tailTokens = tail
+      .split(/\s+/)
+      .map(normalizeToken)
+      .filter(Boolean);
+    const tailCore = tailTokens.filter((token) => !LOWERCASE_NAME_CONNECTORS.has(token));
+    const tailLast = tailCore[tailCore.length - 1] || tailTokens[tailTokens.length - 1] || "";
+    const tailJoined = tailCore.join("");
+
+    let best: { player: PlayerEntry; score: number } | null = null;
+
+    for (const player of players) {
+      if (player.firstInitial !== normalizedInitial) continue;
+
+      const score = Math.max(
+        similarity(tailLast, player.lastName),
+        prefixSimilarity(tailLast, player.lastName),
+        similarity(phoneticForm(tailLast), phoneticForm(player.lastName)),
+        similarity(tailJoined, player.normalizedTokens.slice(1).join("")),
+        similarity(tailCore.map(phoneticForm).join(""), player.phoneticTokens.slice(1).join(""))
+      );
+
+      if (score < 0.56) continue;
+
+      if (!best || score > best.score) {
+        best = { player, score };
+      }
+    }
+
+    return best ? best.player.canonical : match;
+  });
+
+  nextText = nextText.replace(firstNameLastInitialPattern, (match, firstNameLike: string, initial: string) => {
+    const normalizedFirst = normalizeToken(firstNameLike);
+    const normalizedInitial = normalizeToken(initial);
+
+    let best: { player: PlayerEntry; score: number } | null = null;
+
+    for (const player of players) {
+      if (player.lastInitial !== normalizedInitial) continue;
+
+      const score = Math.max(
+        similarity(normalizedFirst, player.firstName),
+        prefixSimilarity(normalizedFirst, player.firstName),
+        similarity(phoneticForm(normalizedFirst), phoneticForm(player.firstName))
+      );
+
+      if (score < 0.62) continue;
+
+      if (!best || score > best.score) {
+        best = { player, score };
+      }
+    }
+
+    return best ? best.player.canonical : match;
+  });
+
+  return nextText;
 }
 
 function applySpanReplacements(text: string, tokens: WordToken[], replacements: Replacement[]) {
@@ -236,8 +474,8 @@ function applySpanReplacements(text: string, tokens: WordToken[], replacements: 
   }
 
   const ordered = [...replacements].sort((left, right) => {
-    if (left.startToken !== right.startToken) {
-      return left.startToken - right.startToken;
+    if (left.score !== right.score) {
+      return right.score - left.score;
     }
 
     const leftLength = left.endTokenExclusive - left.startToken;
@@ -246,17 +484,22 @@ function applySpanReplacements(text: string, tokens: WordToken[], replacements: 
       return rightLength - leftLength;
     }
 
-    return right.score - left.score;
+    return left.startToken - right.startToken;
   });
 
   const selected: Replacement[] = [];
-  let lastEnd = -1;
 
   for (const replacement of ordered) {
-    if (replacement.startToken < lastEnd) continue;
+    const overlapsExisting = selected.some(
+      (existing) =>
+        replacement.startToken < existing.endTokenExclusive &&
+        existing.startToken < replacement.endTokenExclusive
+    );
+    if (overlapsExisting) continue;
     selected.push(replacement);
-    lastEnd = replacement.endTokenExclusive;
   }
+
+  selected.sort((left, right) => left.startToken - right.startToken);
 
   let cursor = 0;
   let output = "";
@@ -279,7 +522,7 @@ function applyManualAliasCorrections(text: string, playerNames: string[]) {
   for (const playerName of playerNames) {
     const aliases = MANUAL_ALIAS_OVERRIDES[playerName] ?? [];
     for (const alias of aliases) {
-      const pattern = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+      const pattern = new RegExp(`\\b${escapeRegExp(alias)}\\b`, "gi");
       nextText = nextText.replace(pattern, playerName);
     }
   }
@@ -287,22 +530,230 @@ function applyManualAliasCorrections(text: string, playerNames: string[]) {
   return nextText;
 }
 
-function applySingleTokenCorrections(text: string, tokens: WordToken[], players: PlayerEntry[]) {
-  const namePartMap = new Map<string, string>();
+function findExactAliasReplacement(spanTokens: WordToken[], aliasIndex: Map<string, PlayerEntry | null>) {
+  const aliasKey = spanTokens
+    .map((token) => token.normalized)
+    .filter(Boolean)
+    .join("");
+
+  if (!aliasKey) {
+    return null;
+  }
+
+  const direct = aliasIndex.get(aliasKey);
+  if (direct) {
+    return direct;
+  }
+
+  return null;
+}
+
+function findInitialPatternMatch(spanTokens: WordToken[], players: PlayerEntry[]) {
+  const spanNormalized = spanTokens.map((token) => token.normalized).filter(Boolean);
+  const nonConnector = spanNormalized.filter((token) => !LOWERCASE_NAME_CONNECTORS.has(token));
+
+  if (nonConnector.length < 2) {
+    return null;
+  }
+
+  const first = nonConnector[0];
+  const last = nonConnector[nonConnector.length - 1];
+  const spanInitials = buildInitialsKey(spanTokens.map((token) => token.value));
+
+  let best: { player: PlayerEntry; score: number } | null = null;
 
   for (const player of players) {
-    for (const token of player.tokens) {
-      const normalized = normalizeToken(token);
-      if (!normalized) continue;
+    let score = 0;
 
-      const existing = namePartMap.get(normalized);
-      if (!existing) {
-        namePartMap.set(normalized, token);
-      } else if (existing !== token) {
-        namePartMap.set(normalized, "");
-      }
+    if (first.length === 1 && first === player.firstInitial) {
+      score = Math.max(
+        score,
+        similarity(last, player.lastName),
+        prefixSimilarity(last, player.lastName),
+        similarity(phoneticForm(last), phoneticForm(player.lastName))
+      );
+    }
+
+    if (last.length === 1 && last === player.lastInitial) {
+      score = Math.max(
+        score,
+        similarity(first, player.firstName),
+        prefixSimilarity(first, player.firstName),
+        similarity(phoneticForm(first), phoneticForm(player.firstName))
+      );
+    }
+
+    if (spanInitials && spanInitials === player.initialsKey && player.uniqueInitials) {
+      score = Math.max(score, 1);
+    }
+
+    if (score < 0.56) {
+      continue;
+    }
+
+    if (!best || score > best.score) {
+      best = { player, score };
     }
   }
+
+  return best;
+}
+
+function chooseBestSpanMatch(spanTokens: WordToken[], players: PlayerEntry[]) {
+  const spanNormalized = spanTokens.map((token) => token.normalized).filter(Boolean);
+  if (spanNormalized.length === 0) {
+    return null;
+  }
+
+  const spanJoined = spanNormalized.join("");
+  const spanPhoneticJoined = spanNormalized.map(phoneticForm).join("");
+  const spanFirst = spanNormalized.find((token) => !LOWERCASE_NAME_CONNECTORS.has(token)) || spanNormalized[0];
+  const spanLast = [...spanNormalized].reverse().find((token) => !LOWERCASE_NAME_CONNECTORS.has(token)) || spanNormalized[spanNormalized.length - 1];
+  const spanInitials = buildInitialsKey(spanTokens.map((token) => token.value));
+  const spanLooksNameLike = spanTokens.every(isNameishToken);
+  const spanHasProperNounSignal = spanTokens.some((token) => token.isCapitalized || token.isAllCaps || isInitialToken(token));
+
+  if (!spanLooksNameLike || !spanHasProperNounSignal) {
+    return null;
+  }
+
+  if (spanTokens.length === 1 && COMMON_NON_NAME_WORDS.has(spanFirst)) {
+    return null;
+  }
+
+  const initialPatternMatch = findInitialPatternMatch(spanTokens, players);
+  if (initialPatternMatch) {
+    return initialPatternMatch;
+  }
+
+  let best: { player: PlayerEntry; score: number } | null = null;
+
+  for (const player of players) {
+    const joinedScore = similarity(spanJoined, player.normalizedJoined);
+    const phoneticScore = similarity(spanPhoneticJoined, player.phoneticJoined);
+    const surnameScore = similarity(spanLast, player.lastName);
+    const surnamePrefixScore = prefixSimilarity(spanLast, player.lastName);
+    const surnamePhoneticScore = similarity(phoneticForm(spanLast), phoneticForm(player.lastName));
+    const firstScore = similarity(spanFirst, player.firstName);
+    const firstPrefixScore = prefixSimilarity(spanFirst, player.firstName);
+    const firstPhoneticScore = similarity(phoneticForm(spanFirst), phoneticForm(player.firstName));
+
+    let score =
+      joinedScore * 0.34 +
+      phoneticScore * 0.2 +
+      surnameScore * 0.2 +
+      firstScore * 0.12 +
+      surnamePrefixScore * 0.09 +
+      firstPrefixScore * 0.03 +
+      surnamePhoneticScore * 0.01 +
+      firstPhoneticScore * 0.01;
+
+    const exactInitials = Boolean(spanInitials && spanInitials === player.initialsKey);
+    const firstInitialMatch = isInitialToken(spanFirst) && spanFirst === player.firstInitial;
+    const lastInitialMatch = isInitialToken(spanLast) && spanLast === player.lastInitial;
+
+    if (exactInitials && player.uniqueInitials) {
+      score += 0.35;
+    }
+
+    if (firstInitialMatch) {
+      score += 0.2;
+    }
+
+    if (lastInitialMatch) {
+      score += 0.2;
+    }
+
+    if (spanTokens.length === 1 && player.uniqueLastName && (surnameScore >= 0.8 || surnamePrefixScore >= 0.85)) {
+      score += 0.3;
+    }
+
+    if (spanTokens.length === 1 && player.uniqueFirstName && (firstScore >= 0.8 || firstPrefixScore >= 0.85)) {
+      score += 0.25;
+    }
+
+    const strongEnough =
+      score >= 0.74 ||
+      (exactInitials && player.uniqueInitials) ||
+      (firstInitialMatch &&
+        Math.max(surnameScore, surnamePrefixScore, surnamePhoneticScore) >= 0.56) ||
+      (lastInitialMatch &&
+        Math.max(firstScore, firstPrefixScore, firstPhoneticScore) >= 0.56) ||
+      (spanTokens.length === 1 && player.uniqueLastName && (surnameScore >= 0.82 || surnamePrefixScore >= 0.9)) ||
+      (spanTokens.length === 1 && player.uniqueFirstName && (firstScore >= 0.85 || firstPrefixScore >= 0.9));
+
+    if (!strongEnough) continue;
+
+    if (!best || score > best.score) {
+      best = { player, score };
+    }
+  }
+
+  return best;
+}
+
+function collectSpanReplacements(text: string, tokens: WordToken[], players: PlayerEntry[], aliasIndex: Map<string, PlayerEntry | null>) {
+  const replacements: Replacement[] = [];
+
+  for (let start = 0; start < tokens.length; start += 1) {
+    for (let size = 2; size <= 4; size += 1) {
+      const end = start + size;
+      if (end > tokens.length) continue;
+
+      const spanTokens = tokens.slice(start, end);
+      const exactAliasMatch = findExactAliasReplacement(spanTokens, aliasIndex);
+
+      if (exactAliasMatch) {
+        replacements.push({
+          startToken: start,
+          endTokenExclusive: end,
+          replacement: exactAliasMatch.canonical,
+          score: 1.5,
+        });
+        continue;
+      }
+
+      const closestMatch = chooseBestSpanMatch(spanTokens, players);
+      if (!closestMatch) continue;
+
+      replacements.push({
+        startToken: start,
+        endTokenExclusive: end,
+        replacement: closestMatch.player.canonical,
+        score: closestMatch.score,
+      });
+    }
+  }
+
+  return applySpanReplacements(text, tokens, replacements);
+}
+
+function applySingleTokenCorrections(
+  text: string,
+  tokens: WordToken[],
+  players: PlayerEntry[],
+  aliasIndex: Map<string, PlayerEntry | null>
+) {
+  const isAlreadyInsideCanonicalName = (index: number, player: PlayerEntry) => {
+    const playerLength = player.normalizedTokens.length;
+
+    for (
+      let start = Math.max(0, index - playerLength + 1);
+      start <= index && start + playerLength <= tokens.length;
+      start += 1
+    ) {
+      const window = tokens.slice(start, start + playerLength).map((token) => token.normalized);
+      const matchesCanonical =
+        window.length === player.normalizedTokens.length &&
+        window.every((token, tokenIndex) => token === player.normalizedTokens[tokenIndex]);
+
+      if (matchesCanonical) {
+        return true;
+      }
+    }
+
+    return false;
+  };
 
   const replacements: Replacement[] = [];
 
@@ -311,32 +762,57 @@ function applySingleTokenCorrections(text: string, tokens: WordToken[], players:
       return;
     }
 
-    let bestReplacement: { value: string; score: number } | null = null;
+    if (COMMON_NON_NAME_WORDS.has(token.normalized)) {
+      return;
+    }
 
-    for (const [normalizedNamePart, canonicalToken] of namePartMap.entries()) {
-      if (!canonicalToken) continue;
+    const exactAliasMatch = aliasIndex.get(token.normalized);
+    if (exactAliasMatch && !isAlreadyInsideCanonicalName(index, exactAliasMatch)) {
+      replacements.push({
+        startToken: index,
+        endTokenExclusive: index + 1,
+        replacement: exactAliasMatch.canonical,
+        score: 1.4,
+      });
+      return;
+    }
 
-      const score = Math.max(
-        similarity(token.normalized, normalizedNamePart),
-        similarity(phoneticForm(token.normalized), phoneticForm(normalizedNamePart))
-      );
+    let bestPlayer: PlayerEntry | null = null;
+    let bestScore = 0;
 
-      if (score < 0.84) continue;
+    for (const player of players) {
+      const surnameScore = similarity(token.normalized, player.lastName);
+      const surnamePrefixScore = prefixSimilarity(token.normalized, player.lastName);
+      const firstScore = similarity(token.normalized, player.firstName);
+      const firstPrefixScore = prefixSimilarity(token.normalized, player.firstName);
+      const phoneticSurnameScore = similarity(phoneticForm(token.normalized), phoneticForm(player.lastName));
+      const phoneticFirstScore = similarity(phoneticForm(token.normalized), phoneticForm(player.firstName));
 
-      if (!bestReplacement || score > bestReplacement.score) {
-        bestReplacement = { value: canonicalToken, score };
+      let score = 0;
+
+      if (player.uniqueLastName) {
+        score = Math.max(score, surnameScore * 0.75 + surnamePrefixScore * 0.25, phoneticSurnameScore);
+      }
+
+      if (player.uniqueFirstName) {
+        score = Math.max(score, firstScore * 0.75 + firstPrefixScore * 0.25, phoneticFirstScore);
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestPlayer = player;
       }
     }
 
-    if (!bestReplacement || bestReplacement.value === token.value) {
+    if (!bestPlayer || bestScore < 0.86 || isAlreadyInsideCanonicalName(index, bestPlayer)) {
       return;
     }
 
     replacements.push({
       startToken: index,
       endTokenExclusive: index + 1,
-      replacement: bestReplacement.value,
-      score: bestReplacement.score,
+      replacement: bestPlayer.canonical,
+      score: bestScore,
     });
   });
 
@@ -353,33 +829,16 @@ export function correctPlayerNamesInCommentary(text: string, playerNames: string
     return text;
   }
 
+  const aliasIndex = buildAliasIndex(players);
+
   let corrected = applyManualAliasCorrections(text, playerNames);
+  corrected = applyGeneratedPatternCorrections(corrected, players);
+  corrected = applyCallbackInitialCorrections(corrected, players);
   let tokens = tokenizeWords(corrected);
+  corrected = collectSpanReplacements(corrected, tokens, players, aliasIndex);
 
-  const spanReplacements: Replacement[] = [];
-
-  for (let start = 0; start < tokens.length; start += 1) {
-    for (let size = 1; size <= 4; size += 1) {
-      const end = start + size;
-      if (end > tokens.length) continue;
-
-      const spanTokens = tokens.slice(start, end);
-      const bestMatch = chooseBestSpanMatch(spanTokens, players, size > 1);
-
-      if (!bestMatch) continue;
-
-      spanReplacements.push({
-        startToken: start,
-        endTokenExclusive: end,
-        replacement: bestMatch.player.canonical,
-        score: bestMatch.score,
-      });
-    }
-  }
-
-  corrected = applySpanReplacements(corrected, tokens, spanReplacements);
   tokens = tokenizeWords(corrected);
-  corrected = applySingleTokenCorrections(corrected, tokens, players);
+  corrected = applySingleTokenCorrections(corrected, tokens, players, aliasIndex);
 
   return corrected;
 }
