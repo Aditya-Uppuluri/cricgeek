@@ -107,6 +107,54 @@ function formatNumber(value: number | null | undefined, digits = 1) {
   return value.toFixed(digits);
 }
 
+function normalizePlayerText(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function playerSignature(value: string) {
+  const tokens = normalizePlayerText(value).split(" ").filter(Boolean);
+  if (tokens.length === 0) {
+    return "";
+  }
+  if (tokens.length === 1) {
+    return tokens[0];
+  }
+  return `${tokens[0][0]} ${tokens[tokens.length - 1]}`;
+}
+
+function matchesPlayerQuery(player: string, query: string) {
+  const normalizedPlayer = normalizePlayerText(player);
+  const normalizedQuery = normalizePlayerText(query);
+
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  if (
+    normalizedPlayer.includes(normalizedQuery) ||
+    normalizedQuery.includes(normalizedPlayer)
+  ) {
+    return true;
+  }
+
+  const playerTokens = normalizedPlayer.split(" ").filter(Boolean);
+  const queryTokens = normalizedQuery.split(" ").filter(Boolean);
+  if (
+    playerTokens.length >= 2 &&
+    queryTokens.length >= 2 &&
+    playerTokens[playerTokens.length - 1] === queryTokens[queryTokens.length - 1] &&
+    playerTokens[0][0] === queryTokens[0][0]
+  ) {
+    return true;
+  }
+
+  return playerSignature(player) === playerSignature(query);
+}
+
 function scoreTone(value: number) {
   if (value >= 65) return "text-cg-green";
   if (value >= 45) return "text-amber-300";
@@ -296,7 +344,7 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
 
   const playerMatches = metadata
     ? metadata.players
-        .filter((player) => player.toLowerCase().includes(deferredPlayerQuery.trim().toLowerCase()))
+        .filter((player) => matchesPlayerQuery(player, deferredPlayerQuery))
         .slice(0, 10)
     : [];
 

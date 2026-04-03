@@ -1,9 +1,19 @@
 const DEFAULT_AI_SERVICE_URL = "http://127.0.0.1:8000";
+const vercelInsightsUrl = process.env.VERCEL_URL
+  ? `https://${process.env.VERCEL_URL}/_insights`
+  : undefined;
 
-export const AI_SERVICE_URL = process.env.AI_SERVICE_URL || DEFAULT_AI_SERVICE_URL;
+const configuredAiServiceUrl =
+  process.env.INSIGHTS_URL ||
+  process.env.T20_INSIGHTS_URL ||
+  vercelInsightsUrl ||
+  process.env.AI_SERVICE_URL ||
+  DEFAULT_AI_SERVICE_URL;
+
+export const AI_SERVICE_URL = configuredAiServiceUrl;
 
 const isLocalAiService =
-  AI_SERVICE_URL.includes("127.0.0.1") || AI_SERVICE_URL.includes("localhost");
+  configuredAiServiceUrl.includes("127.0.0.1") || configuredAiServiceUrl.includes("localhost");
 
 type ForwardResult = {
   body: string;
@@ -13,8 +23,15 @@ type ForwardResult = {
 };
 
 function assertAiServiceAvailable() {
-  if (process.env.NODE_ENV === "production" && !process.env.AI_SERVICE_URL && isLocalAiService) {
-    throw new Error("AI_SERVICE_URL is not configured for production");
+  const hasConfiguredProductionService = Boolean(
+    process.env.INSIGHTS_URL ||
+      process.env.T20_INSIGHTS_URL ||
+      process.env.VERCEL_URL ||
+      process.env.AI_SERVICE_URL
+  );
+
+  if (process.env.NODE_ENV === "production" && !hasConfiguredProductionService && isLocalAiService) {
+    throw new Error("No deployed insights service URL is configured for production");
   }
 }
 

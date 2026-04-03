@@ -12,7 +12,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
 import whisper
 
@@ -24,14 +24,7 @@ from ranking_service import get_leaderboard, compute_engagement_score
 from sportmonks_client import get_sportmonks_client
 from entity_cache import get_entity_cache
 import ollama_client
-from t20_insights import (
-    T20InsightsUnavailable,
-    get_evaluation as get_t20_evaluation,
-    get_manual_advisor as get_t20_manual_advisor,
-    get_metadata as get_t20_metadata,
-    get_player_explorer as get_t20_player_explorer,
-    search_players as search_t20_players,
-)
+from t20_api import router as t20_router
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("main")
@@ -124,6 +117,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(t20_router)
+
 
 # ── Request / Response Models ────────────────────────────────────────
 
@@ -193,19 +188,6 @@ class RankingsRequest(BaseModel):
     bloggers: list[dict]
     top_n: int = 25
     weights: Optional[dict] = None
-
-
-class T20AdvisorRequest(BaseModel):
-    runs: int = Field(ge=0, le=300)
-    wickets: int = Field(ge=0, le=10)
-    overs: float = Field(ge=0, le=20)
-    innings: int = Field(ge=1, le=2)
-    target: Optional[int] = Field(default=None, ge=1, le=400)
-    batting_team: Optional[str] = None
-    bowling_team: Optional[str] = None
-    match_gender: str = "male"
-    strategy: str = "balanced"
-    top_n: int = Field(default=5, ge=3, le=10)
 
 
 # ── Endpoints ────────────────────────────────────────────────────────
@@ -295,77 +277,6 @@ async def get_blogger_rankings(req: RankingsRequest):
     except Exception as e:
         logger.error(f"Rankings failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Rankings failed: {str(e)}")
-
-
-@app.get("/t20-insights/meta")
-async def get_t20_insights_metadata(
-    query: Optional[str] = None,
-    team: Optional[str] = None,
-    gender: Optional[str] = None,
-    limit: int = 50,
-):
-    try:
-        payload = get_t20_metadata()
-        payload["playerMatches"] = search_t20_players(
-            query=query,
-            team=team,
-            gender=gender,
-            limit=limit,
-        )
-        return payload
-    except T20InsightsUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(f"T20 metadata failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"T20 metadata failed: {str(exc)}") from exc
-
-
-@app.post("/t20-insights/advisor")
-async def get_t20_insights_advisor(req: T20AdvisorRequest):
-    try:
-        return get_t20_manual_advisor(
-            runs=req.runs,
-            wickets=req.wickets,
-            overs=req.overs,
-            innings=req.innings,
-            target=req.target,
-            batting_team=req.batting_team,
-            bowling_team=req.bowling_team,
-            match_gender=req.match_gender,
-            strategy=req.strategy,
-            top_n=req.top_n,
-        )
-    except T20InsightsUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(f"T20 advisor failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"T20 advisor failed: {str(exc)}") from exc
-
-
-@app.get("/t20-insights/evaluation")
-async def get_t20_insights_evaluation(sample_situations: int = 80):
-    bounded_sample_size = max(20, min(sample_situations, 150))
-
-    try:
-        return get_t20_evaluation(bounded_sample_size)
-    except T20InsightsUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(f"T20 evaluation failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"T20 evaluation failed: {str(exc)}") from exc
-
-
-@app.get("/t20-insights/player")
-async def get_t20_insights_player(name: str):
-    try:
-        return get_t20_player_explorer(name)
-    except T20InsightsUnavailable as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.error(f"T20 player explorer failed: {exc}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"T20 player explorer failed: {str(exc)}") from exc
 
 
 # ── Speech-to-Text (Whisper) ─────────────────────────────────────────

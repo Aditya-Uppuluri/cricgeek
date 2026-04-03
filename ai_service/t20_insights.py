@@ -104,6 +104,65 @@ def _normalize_strategy(strategy: Optional[str], innings_type: str) -> str:
     return "batting_first"
 
 
+def _normalize_player_text(value: Optional[str]) -> str:
+    if not value:
+        return ""
+
+    normalized = "".join(character.lower() if character.isalnum() else " " for character in value)
+    return " ".join(normalized.split())
+
+
+def _player_signature(value: Optional[str]) -> str:
+    tokens = _normalize_player_text(value).split()
+    if not tokens:
+        return ""
+    if len(tokens) == 1:
+        return tokens[0]
+    return f"{tokens[0][0]} {tokens[-1]}"
+
+
+def _player_query_rank(player_name: str, query: str) -> Optional[tuple[int, int, int]]:
+    player_normalized = _normalize_player_text(player_name)
+    query_normalized = _normalize_player_text(query)
+    if not player_normalized or not query_normalized:
+        return None
+
+    if player_normalized == query_normalized:
+        return (0, 0, len(player_normalized))
+
+    if query_normalized in player_normalized:
+        return (1, player_normalized.index(query_normalized), len(player_normalized))
+
+    if player_normalized in query_normalized:
+        return (2, query_normalized.index(player_normalized), len(player_normalized))
+
+    player_signature = _player_signature(player_name)
+    query_signature = _player_signature(query)
+    if player_signature and query_signature and player_signature == query_signature:
+        return (3, 0, len(player_normalized))
+
+    player_tokens = player_normalized.split()
+    query_tokens = query_normalized.split()
+    if (
+        len(player_tokens) >= 2
+        and len(query_tokens) >= 2
+        and player_tokens[-1] == query_tokens[-1]
+        and player_tokens[0][0] == query_tokens[0][0]
+    ):
+        return (4, 0, len(player_normalized))
+
+    if query_tokens and all(
+        any(
+            token in candidate_token or candidate_token in token
+            for candidate_token in player_tokens
+        )
+        for token in query_tokens
+    ):
+        return (5, 0, len(player_normalized))
+
+    return None
+
+
 def _overs_to_balls(overs: float) -> int:
     whole_overs = int(overs)
     balls = int(round((overs - whole_overs) * 10 + 1e-9))
@@ -897,8 +956,15 @@ def search_players(
             matches = [player for player in matches if player in team_players]
 
     if query:
-        q = query.strip().lower()
-        matches = [player for player in matches if q in player.lower()]
+        ranked_matches = []
+        for index, player in enumerate(matches):
+            rank = _player_query_rank(player, query)
+            if rank is None:
+                continue
+            ranked_matches.append((rank, index, player))
+
+        ranked_matches.sort(key=lambda item: (item[0], item[1]))
+        matches = [player for _, _, player in ranked_matches]
 
     return matches[: max(1, min(int(limit), 100))]
 
@@ -911,9 +977,14 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
     if aggregated_df.empty or "batsman" not in aggregated_df.columns:
         raise ValueError("Player explorer data is unavailable.")
 
-    player_rows = aggregated_df[aggregated_df["batsman"] == player_name].copy()
+    canonical_player_name = player_name
+    player_rows = aggregated_df[aggregated_df["batsman"] == canonical_player_name].copy()
     if player_rows.empty:
-        raise ValueError(f"No situation profile was found for {player_name}.")
+        matches = search_players(query=player_name, limit=1)
+        if not matches:
+            raise ValueError(f"No situation profile was found for {player_name}.")
+        canonical_player_name = matches[0]
+        player_rows = aggregated_df[aggregated_df["batsman"] == canonical_player_name].copy()
 
     phase_avgs = (
         player_rows.assign(phase=player_rows["situation_label"].str.split("|").str[0])
@@ -939,7 +1010,7 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
         ) if global_phase_avg else None
 
     entry_rows = (
-        entries_with_perf[entries_with_perf["batsman"] == player_name].copy()
+        entries_with_perf[entries_with_perf["batsman"] == canonical_player_name].copy()
         if not entries_with_perf.empty and "batsman" in entries_with_perf.columns
         else pd.DataFrame()
     )
@@ -951,9 +1022,10 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
         )
 
     summary = {
-        "player": player_name,
-        "team": artifacts.get("player_to_team", {}).get(player_name),
-        "imageUrl": artifacts.get("player_image_urls", {}).get(player_name),
+        "player": canonical_player_name,
+        "requestedPlayer": player_name,
+        "team": artifacts.get("player_to_team", {}).get(canonical_player_name),
+        "imageUrl": artifacts.get("player_image_urls", {}).get(canonical_player_name),
         "situations": int(len(player_rows)),
         "avgExpectedRuns": round(float(player_rows["avg_runs_after_entry"].mean()), 1),
         "totalEntries": int(player_rows["entry_count"].sum()) if "entry_count" in player_rows.columns else 0,

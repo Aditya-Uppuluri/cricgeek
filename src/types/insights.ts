@@ -116,6 +116,7 @@ export interface InsightsEvaluationResponse {
 
 export interface PlayerExplorerSummary {
   player: string;
+  requestedPlayer?: string | null;
   team?: string | null;
   imageUrl?: string | null;
   situations: number;

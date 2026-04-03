@@ -7,6 +7,12 @@ export async function GET() {
   const ollamaUrl = process.env.OLLAMA_URL || process.env.OLLAMA_BASE_URL;
   const authUrl = process.env.AUTH_URL || process.env.NEXTAUTH_URL;
   const authSecret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+  const insightsServiceUrl =
+    process.env.INSIGHTS_URL ||
+    process.env.T20_INSIGHTS_URL ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}/_insights` : null) ||
+    process.env.AI_SERVICE_URL ||
+    null;
   const trustHost =
     process.env.AUTH_TRUST_HOST === "true" ||
     process.env.TRUST_HOST === "true" ||
@@ -29,6 +35,17 @@ export async function GET() {
       : process.env.AI_SERVICE_URL
         ? "legacy"
         : "none",
+    insightsConfigured: Boolean(insightsServiceUrl),
+    insightsProvider: process.env.INSIGHTS_URL
+      ? "vercel-service"
+      : process.env.T20_INSIGHTS_URL
+        ? "custom-insights"
+        : process.env.VERCEL_URL
+          ? "same-project-service"
+        : process.env.AI_SERVICE_URL
+          ? "legacy-ai-service"
+          : "none",
+    insightsServiceUrl,
     searchConfigured: Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY),
     searchProvider: process.env.SERPER_API_KEY ? "serper" : process.env.TAVILY_API_KEY ? "tavily" : "none",
     ollamaConfigured: Boolean(ollamaUrl),
