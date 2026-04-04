@@ -69,40 +69,33 @@ function buildSystemPrompt(options?: CommentaryPolishOptions) {
 
   const keytermContext =
     options?.keyterms && options.keyterms.length > 0
-      ? ` Match context terms: ${options.keyterms.join(", ")}.`
+      ? `\nMatch context keywords: ${options.keyterms.join(", ")}.`
       : "";
 
-  const playerInstructions = rosterBlock
-    ? `\n\nPlayer name correction rules (IMPORTANT):\n- You MUST treat player-name repair as a primary task.\n- If the commentary contains a garbled proper noun, initials, partial name, a close misspelling, or a phonetically similar word that plausibly refers to a player in the roster, rewrite it to the exact spelling from the roster.\n- Use the player's ROLE as additional context: for example, if you see "the bowler Bumra" and the roster lists "Jasprit Bumrah — Bowler", correct it to "Jasprit Bumrah".\n- Initials like "AR", "A Raghu", "V Chak", or "KL" should be expanded to the most likely unique player using first+last initials vs the roster.\n- If a capitalized phrase looks like a player name but does not exactly match, choose the nearest roster player whose role is consistent with the context (e.g., "hit a six" → batter; "clean bowled" → bowler).`
+  const rosterInstructions = rosterBlock
+    ? `\n\nPLAYER NAME CORRECTION — this is your most critical task:\n- Every player name in the transcript MUST be corrected to the exact spelling from the roster below.\n- Use BOTH the roster spelling AND the semantic context of the sentence to identify which player is being referred to. For example, if the sentence says "the bowler took a wicket" and the roster shows Jasprit Bumrah as Bowler, and the spoken name sounds like "Bumra" or "Boom-ra", output "Jasprit Bumrah".\n- Initials like "AR", "VK", "A Raghu", or phonetic approximations like "Angrish Raghuvanshi" must be resolved to the closest matching full name in the roster.\n- If a name is close to a roster entry (phonetically, by initials, or by partial spelling), always prefer the roster name over the raw transcript word.\n- Keep team abbreviations (KKR, MI, SRH, RCB, etc.) uppercase and unchanged.`
     : "";
 
-  return `You are a fast finalizer for live cricket commentary.
+  return `You are a cricket commentary post-processor. Your job is to take a raw speech-to-text transcript and fully rewrite it into a clean, publish-ready commentary line.
 
-Your job is to make the transcript publish-ready while staying very close to what the speaker actually said.
+You MUST do the following — no exceptions:
+1. Fix all grammar, punctuation, and sentence structure so the output reads like polished written English.
+2. Correct every player name to its exact proper spelling, using the team roster provided AND the semantic meaning of the sentence (e.g. who is batting, who is bowling, who ran someone out) to resolve any ambiguity.
+3. Preserve the speaker's original meaning, opinion, and cricket facts — do not add or remove facts.
+4. Remove filler words, false starts, and accidental repetition.
+5. Do NOT leave any misspelled, garbled, or phonetically-approximated player name in the output — always resolve it to the correct roster name.
+${rosterBlock}${rosterInstructions}${keytermContext}
 
-Core rules:
-- Make minimal edits.
-- Fix grammar, punctuation, capitalization, and obvious speech-to-text mistakes.
-- Remove accidental repetition, filler fragments, and false starts only when they are clearly unintended.
-- Preserve the meaning, tone, and cricket facts.
-- Do not add new facts, new opinions, or new players.
-- Do not replace unclear words with unrelated words.
-- If a phrase is uncertain, prefer the closest cricket proper noun over an unrelated rewrite.
-- Do not delete a named entity just because it is not in the current squad.
-- If a likely cricketer or cricket proper noun is spoken imperfectly, repair it from general cricket knowledge when confidence is high. For example, "Boombra" should usually become "Bumrah".
-- Keep team abbreviations like KKR and SRH uppercase.
-${rosterBlock}${playerInstructions}${keytermContext}
-
-Return only one final corrected commentary line.`;
+Return ONLY the final corrected commentary line. No explanations, no preamble.`;
 }
 
-function buildUserPrompt(input: string, fallback: string, options?: CommentaryPolishOptions) {
-  const normalizedHint =
-    options?.preNormalizedText && options.preNormalizedText !== fallback
-      ? `Reference normalization:\n${options.preNormalizedText}\n\n`
+function buildUserPrompt(input: string, _fallback: string, options?: CommentaryPolishOptions) {
+  const preNorm =
+    options?.preNormalizedText && options.preNormalizedText !== input
+      ? `\nPre-normalized (rule-based name correction already applied):\n${options.preNormalizedText}\n`
       : "";
 
-  return `Raw transcript:\n${input}\n\n${normalizedHint}Light cleanup baseline:\n${fallback}\n\nProduce a lightly refined final line that:\n- sticks closely to the raw speech\n- fixes grammar and punctuation\n- removes obvious accidental repetition\n- corrects player names to exact roster spellings (using role context where ambiguous)\n- preserves or repairs cricket names instead of dropping them`;
+  return `Take the following raw speech-to-text transcript and completely convert it into a grammatically correct, properly punctuated commentary line with all player names corrected to their exact proper spellings as per the team roster and the semantic context of the sentence.\n\nRaw transcript:\n${input}\n${preNorm}\nOutput the fully corrected commentary line:`;
 }
 
 export async function polishCommentaryForSubmission(
@@ -163,7 +156,8 @@ export async function polishCommentaryForSubmission(
       return fallback;
     }
 
-    if (polished.length > fallback.length * 1.75) {
+    // Allow up to 2.5× the fallback length — a full rewrite can be longer
+    if (polished.length > fallback.length * 2.5) {
       return fallback;
     }
 
