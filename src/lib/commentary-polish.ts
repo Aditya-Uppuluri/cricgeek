@@ -33,6 +33,71 @@ function normalizeAlias(text: string) {
   return text.trim();
 }
 
+function escapeRegExp(text: string) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function getRosterNames(options?: CommentaryPolishOptions) {
+  if (options?.players && options.players.length > 0) {
+    return options.players.map((player) => player.name).filter(Boolean);
+  }
+
+  return options?.playerNames?.filter(Boolean) ?? [];
+}
+
+type ProtectedNameSet = {
+  input: string;
+  preNormalizedText?: string;
+  placeholders: Array<{ token: string; name: string }>;
+};
+
+function buildProtectedNameSet(input: string, options?: CommentaryPolishOptions): ProtectedNameSet {
+  const names = [...new Set(getRosterNames(options))]
+    .filter((name) => name && name.trim().length > 0)
+    .sort((left, right) => right.length - left.length);
+
+  let nextInput = input;
+  let nextPreNormalized = options?.preNormalizedText;
+  const placeholders: Array<{ token: string; name: string }> = [];
+
+  for (const name of names) {
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, "gi");
+    const appearsInInput = pattern.test(nextInput);
+    pattern.lastIndex = 0;
+    const appearsInPreNormalized = nextPreNormalized ? pattern.test(nextPreNormalized) : false;
+    pattern.lastIndex = 0;
+
+    if (!appearsInInput && !appearsInPreNormalized) {
+      continue;
+    }
+
+    const token = `PLAYER_TOKEN_${placeholders.length + 1}`;
+    nextInput = nextInput.replace(pattern, token);
+    if (nextPreNormalized) {
+      pattern.lastIndex = 0;
+      nextPreNormalized = nextPreNormalized.replace(pattern, token);
+    }
+    placeholders.push({ token, name });
+  }
+
+  return {
+    input: nextInput,
+    preNormalizedText: nextPreNormalized,
+    placeholders,
+  };
+}
+
+function restoreProtectedNames(text: string, protectedNames: ProtectedNameSet) {
+  let nextText = text;
+
+  for (const placeholder of protectedNames.placeholders) {
+    const pattern = new RegExp(`\\b${escapeRegExp(placeholder.token)}\\b`, "g");
+    nextText = nextText.replace(pattern, placeholder.name);
+  }
+
+  return nextText;
+}
+
 function buildPlayerRosterBlock(options?: CommentaryPolishOptions): string {
   if (options?.players && options.players.length > 0) {
     const rows = options.players
@@ -93,6 +158,7 @@ PLAYER NAME RESOLUTION RULES — HIGHEST PRIORITY
    Example: use "the batter" or "the bowler" rather than inventing a name.
 8. Team abbreviations such as KKR, MI, RCB, CSK, SRH, RR, PBKS, DC, GT, LSG must remain uppercase.
 9. Preserve all cricket facts exactly. Do not change runs, wickets, overs, dismissal type, or match events.
+10. If the raw transcript or the pre-normalized version already contains an exact full roster name, preserve that exact roster name. Never rewrite one valid roster player into another.
 ${boldInstruction}
 
 OUTPUT RULES
@@ -102,6 +168,7 @@ OUTPUT RULES
 - No quotation marks unless required by meaning.
 - Clean grammar and punctuation.
 - Remove filler words, hesitations, and duplicate fragments.
+- If tokens like PLAYER_TOKEN_1 appear, preserve them exactly.
 `.trim();
 }
 
@@ -180,6 +247,8 @@ export async function polishCommentaryForSubmission(
     return fallback;
   }
 
+  const protectedNames = buildProtectedNameSet(input, options);
+
   try {
     const response = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: "POST",
@@ -198,7 +267,10 @@ export async function polishCommentaryForSubmission(
           },
           {
             role: "user",
-            content: buildUserPrompt(input, fallback, options),
+            content: buildUserPrompt(protectedNames.input, fallback, {
+              ...options,
+              preNormalizedText: protectedNames.preNormalizedText,
+            }),
           },
         ],
       }),
@@ -218,7 +290,9 @@ export async function polishCommentaryForSubmission(
           ? payload.response
           : "";
 
-    const polished = finalizeCommentaryText(normalizeModelOutput(candidate));
+    const polished = finalizeCommentaryText(
+      restoreProtectedNames(normalizeModelOutput(candidate), protectedNames)
+    );
 
     if (!polished) {
       return fallback;

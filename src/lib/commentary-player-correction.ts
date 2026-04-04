@@ -74,7 +74,7 @@ const COMMON_NON_NAME_WORDS = new Set([
   "yorker",
 ]);
 
-const MANUAL_ALIAS_OVERRIDES: Record<string, string[]> = {
+export const MANUAL_ALIAS_OVERRIDES: Record<string, string[]> = {
   "Angkrish Raghuvanshi": [
     "english raghuvanshi",
     "angrish raghuvanshi",
@@ -106,6 +106,10 @@ const MANUAL_ALIAS_OVERRIDES: Record<string, string[]> = {
     "sunny narine",
   ],
 };
+
+export function getManualAliasesForPlayer(playerName: string) {
+  return MANUAL_ALIAS_OVERRIDES[playerName] ?? [];
+}
 
 function normalizeToken(token: string) {
   return token.toLowerCase().replace(/[^a-z]/g, "");

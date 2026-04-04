@@ -2,6 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/db";
 import { getMatchInfo, getMatchSquad } from "@/lib/cricket-api";
+import { getManualAliasesForPlayer } from "@/lib/commentary-player-correction";
 import { extractTeamHintsFromTitle } from "@/lib/commentary-team-lookup";
 import { getSMTeamRostersForHints, isSportMonksConfigured } from "@/lib/sportmonks";
 
@@ -9,6 +10,7 @@ export interface MatchContextPlayer {
   name: string;
   role?: string;
   team?: string;
+  aliases?: string[];
 }
 
 export async function getCommentarySessionMatchContext(sessionId: string | null) {
@@ -69,6 +71,7 @@ export async function getCommentarySessionMatchContext(sessionId: string | null)
         name,
         role: normalisePlayerRole(player.role?.trim() || "") || undefined,
         team: squad.teamName || undefined,
+        aliases: getManualAliasesForPlayer(name),
       });
     }
   };
