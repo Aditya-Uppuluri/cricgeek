@@ -7,19 +7,19 @@ const COMMENTARY_POLISH_TIMEOUT_MS = 4_500;
 const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || "qwen3.5:latest";
 
-export type PolishPlayer = {
+export type CommentaryPlayer = {
   name: string;
   role?: string;
   team?: string;
+  aliases?: string[];
 };
 
 type CommentaryPolishOptions = {
-  /** Flat list of player name strings — kept for backwards compatibility */
+  players?: CommentaryPlayer[];
   playerNames?: string[];
-  /** Rich player objects with name + role — preferred when available */
-  players?: PolishPlayer[];
   keyterms?: string[];
   preNormalizedText?: string;
+  emphasizeNames?: boolean;
 };
 
 function normalizeModelOutput(text: string): string {
@@ -29,73 +29,141 @@ function normalizeModelOutput(text: string): string {
     .trim();
 }
 
-/**
- * Build a compact roster block for the system prompt.
- *
- * If rich `players` are available we emit a formatted table so Qwen has
- * role context to resolve ambiguous names:
- *
- *   Player Roster (use these exact spellings):
- *   • Jasprit Bumrah            — Bowler
- *   • Virat Kohli               — Batter
- *   • Ravindra Jadeja           — All-rounder
- *
- * Otherwise we fall back to the flat name list.
- */
+function normalizeAlias(text: string) {
+  return text.trim();
+}
+
 function buildPlayerRosterBlock(options?: CommentaryPolishOptions): string {
-  // Prefer rich player objects
   if (options?.players && options.players.length > 0) {
     const rows = options.players
       .map((p) => {
-        const roleSuffix = p.role ? ` — ${p.role}` : "";
-        const teamSuffix = p.team ? ` (${p.team})` : "";
-        return `  • ${p.name}${roleSuffix}${teamSuffix}`;
+        const rolePart = p.role ? ` | role: ${p.role}` : "";
+        const teamPart = p.team ? ` | team: ${p.team}` : "";
+        const aliasPart =
+          p.aliases && p.aliases.length > 0
+            ? ` | aliases: ${p.aliases.map(normalizeAlias).join(", ")}`
+            : "";
+        return `- ${p.name}${rolePart}${teamPart}${aliasPart}`;
       })
       .join("\n");
 
-    return `\nPlayer Roster — use EXACTLY these spellings and refer to roles when resolving ambiguous transcriptions:\n${rows}`;
+    return `
+OFFICIAL PLAYER ROSTER
+Use ONLY names from this roster when resolving any person reference in the transcript.
+If a spoken name is partial, garbled, phonetically similar, or reduced to initials, map it to the closest valid full name from this roster.
+
+${rows}`.trim();
   }
 
-  // Fallback: plain name list
   if (options?.playerNames && options.playerNames.length > 0) {
-    return `\nValid player names for this match: ${options.playerNames.join(", ")}.`;
+    return `
+OFFICIAL PLAYER ROSTER
+Valid player names for this match:
+${options.playerNames.map((name) => `- ${name}`).join("\n")}`.trim();
   }
 
   return "";
 }
 
+function buildStrictResolutionRules(options?: CommentaryPolishOptions): string {
+  const boldInstruction = options?.emphasizeNames
+    ? `
+BOLDING RULE:
+- Wrap resolved player names in markdown bold only when they appear as the key cricketing actor in the sentence.
+- Example: "**Angkrish Raghuvanshi** drives it through covers."
+- Do NOT bold team abbreviations, scores, overs, or random nouns.
+`
+    : `
+BOLDING RULE:
+- Do not add markdown bold unless it already exists in the input.
+`;
+
+  return `
+PLAYER NAME RESOLUTION RULES — HIGHEST PRIORITY
+1. Every player mention in the output must be a valid full name from the OFFICIAL PLAYER ROSTER.
+2. Never output a raw ASR form such as "Ankesh", "Angrish", "Boomra", "Rinkoo", "Venki", "Raghu", or initials like "VK", "AR", "HP" if a roster match exists.
+3. If the transcript contains a partial name, initials, nickname, or phonetic approximation, expand it to the single best full roster name.
+4. Use sentence meaning to resolve ambiguity:
+   - if the person is batting, prefer a batter from the roster
+   - if bowling or taking a wicket, prefer a bowler
+   - if fielding or wicketkeeping, prefer the player whose role best fits
+5. If multiple names sound similar, choose the roster name that best matches BOTH sound and cricket context.
+6. Never invent a player name that is not in the roster.
+7. If no confident roster match exists, keep the phrase generic instead of hallucinating a wrong person.
+   Example: use "the batter" or "the bowler" rather than inventing a name.
+8. Team abbreviations such as KKR, MI, RCB, CSK, SRH, RR, PBKS, DC, GT, LSG must remain uppercase.
+9. Preserve all cricket facts exactly. Do not change runs, wickets, overs, dismissal type, or match events.
+${boldInstruction}
+
+OUTPUT RULES
+- Return exactly one polished commentary line.
+- No explanation.
+- No bullet points.
+- No quotation marks unless required by meaning.
+- Clean grammar and punctuation.
+- Remove filler words, hesitations, and duplicate fragments.
+`.trim();
+}
+
 function buildSystemPrompt(options?: CommentaryPolishOptions) {
   const rosterBlock = buildPlayerRosterBlock(options);
-
   const keytermContext =
     options?.keyterms && options.keyterms.length > 0
-      ? `\nMatch context keywords: ${options.keyterms.join(", ")}.`
+      ? `\nMATCH KEYWORDS\n- ${options.keyterms.join("\n- ")}`
       : "";
 
-  const rosterInstructions = rosterBlock
-    ? `\n\nPLAYER NAME CORRECTION — this is your most critical task:\n- Every player name in the transcript MUST be corrected to the exact spelling from the roster below.\n- Use BOTH the roster spelling AND the semantic context of the sentence to identify which player is being referred to. For example, if the sentence says "the bowler took a wicket" and the roster shows Jasprit Bumrah as Bowler, and the spoken name sounds like "Bumra" or "Boom-ra", output "Jasprit Bumrah".\n- Initials like "AR", "VK", "A Raghu", or phonetic approximations like "Angrish Raghuvanshi" must be resolved to the closest matching full name in the roster.\n- If a name is close to a roster entry (phonetically, by initials, or by partial spelling), always prefer the roster name over the raw transcript word.\n- Keep team abbreviations (KKR, MI, SRH, RCB, etc.) uppercase and unchanged.`
+  const rosterRequirement = rosterBlock
+    ? `
+You MUST use the roster below as the exclusive source of truth for player names.
+
+${rosterBlock}
+`
     : "";
 
-  return `You are a cricket commentary post-processor. Your job is to take a raw speech-to-text transcript and fully rewrite it into a clean, publish-ready commentary line.
+  return `
+You are a cricket commentary post-processor.
 
-You MUST do the following — no exceptions:
-1. Fix all grammar, punctuation, and sentence structure so the output reads like polished written English.
-2. Correct every player name to its exact proper spelling, using the team roster provided AND the semantic meaning of the sentence (e.g. who is batting, who is bowling, who ran someone out) to resolve any ambiguity.
-3. Preserve the speaker's original meaning, opinion, and cricket facts — do not add or remove facts.
-4. Remove filler words, false starts, and accidental repetition.
-5. Do NOT leave any misspelled, garbled, or phonetically-approximated player name in the output — always resolve it to the correct roster name.
-${rosterBlock}${rosterInstructions}${keytermContext}
+Your task is to convert noisy speech-to-text cricket commentary into one clean, publish-ready commentary sentence.
 
-Return ONLY the final corrected commentary line. No explanations, no preamble.`;
+${buildStrictResolutionRules(options)}
+
+CORE REQUIREMENTS
+- Fix grammar, punctuation, capitalization, spacing, and sentence structure.
+- Preserve the original cricket meaning.
+- Correct player names aggressively but only using the roster when a roster is available.
+- Prefer full player names over surnames, initials, or nicknames.
+- Keep cricket terminology natural and professional.
+- Do not make the sentence longer than needed.
+${rosterRequirement}${keytermContext}
+
+Return only the corrected commentary line.
+`.trim();
 }
 
 function buildUserPrompt(input: string, _fallback: string, options?: CommentaryPolishOptions) {
-  const preNorm =
+  const preNormalizedVersion =
     options?.preNormalizedText && options.preNormalizedText !== input
-      ? `\nPre-normalized (rule-based name correction already applied):\n${options.preNormalizedText}\n`
+      ? `
+PRE-NORMALIZED VERSION
+${options.preNormalizedText}
+`
       : "";
 
-  return `Take the following raw speech-to-text transcript and completely convert it into a grammatically correct, properly punctuated commentary line with all player names corrected to their exact proper spellings as per the team roster and the semantic context of the sentence.\n\nRaw transcript:\n${input}\n${preNorm}\nOutput the fully corrected commentary line:`;
+  return `
+Rewrite the following raw cricket commentary transcript into one polished commentary line.
+
+RAW TRANSCRIPT
+${input}
+${preNormalizedVersion}
+
+Important:
+- Resolve every player reference to the exact full roster name whenever possible.
+- If the transcript contains a garbled player name, do not preserve the garbled form.
+- If the sentence strongly implies a roster player, use that full name.
+- If no safe match exists, use a generic cricket role term instead of hallucinating.
+
+Now output the final corrected commentary line only.
+`.trim();
 }
 
 export async function polishCommentaryForSubmission(
@@ -156,7 +224,6 @@ export async function polishCommentaryForSubmission(
       return fallback;
     }
 
-    // Allow up to 2.5× the fallback length — a full rewrite can be longer
     if (polished.length > fallback.length * 2.5) {
       return fallback;
     }
