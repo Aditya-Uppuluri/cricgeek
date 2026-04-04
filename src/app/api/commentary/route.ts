@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
+import { getMatchInfo } from "@/lib/cricket-api";
+import { extractTeamHintsFromTitle, formatCommentaryTitleFromCodes } from "@/lib/commentary-team-lookup";
 
 // GET /api/commentary — list sessions (optionally filter by status and/or matchId)
 export async function GET(request: Request) {
@@ -68,6 +70,21 @@ export async function POST(request: Request) {
       );
     }
 
+    let canonicalMatchName = matchName;
+    const liveMatch = await getMatchInfo(matchId, { fresh: true });
+    const liveCodes = liveMatch?.teamInfo
+      ?.map((team) => team.shortname?.trim().toUpperCase())
+      .filter((code): code is string => Boolean(code));
+
+    if (liveCodes && liveCodes.length >= 2) {
+      canonicalMatchName = formatCommentaryTitleFromCodes(liveCodes[0], liveCodes[1]);
+    } else {
+      const titleCodes = extractTeamHintsFromTitle(matchName).map((code) => code.toUpperCase());
+      if (titleCodes.length >= 2) {
+        canonicalMatchName = formatCommentaryTitleFromCodes(titleCodes[0], titleCodes[1]);
+      }
+    }
+
     const existingLiveSession = await prisma.liveCommentarySession.findFirst({
       where: {
         matchId,
@@ -96,7 +113,7 @@ export async function POST(request: Request) {
     const commentarySession = await prisma.liveCommentarySession.create({
       data: {
         matchId,
-        matchName,
+        matchName: canonicalMatchName,
         matchType: matchType || "T20",
         moderatorId: userId,
         status: requestedStatus,

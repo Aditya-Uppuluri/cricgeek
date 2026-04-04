@@ -197,11 +197,12 @@ export default function CommentaryListClient({
               <label className="block text-gray-400 text-xs font-medium mb-1.5">Match Name</label>
               <input
                 type="text"
-                placeholder="e.g. IND vs AUS - 3rd T20I"
+                placeholder="e.g. KKR vs MI"
                 value={matchName}
                 onChange={(e) => setMatchName(e.target.value)}
                 className="w-full px-3 py-2.5 rounded-xl bg-gray-800 border border-gray-700 text-white text-sm focus:border-cg-green focus:outline-none"
               />
+              <p className="mt-1 text-[11px] text-gray-500">Use strict team-code titles like `KKR vs MI` for roster lookup.</p>
             </div>
             <div>
               <label className="block text-gray-400 text-xs font-medium mb-1.5">Format</label>

@@ -3,7 +3,7 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getMatchInfo, getMatchSquad } from "@/lib/cricket-api";
 import { getManualAliasesForPlayer } from "@/lib/commentary-player-correction";
-import { extractTeamHintsFromTitle } from "@/lib/commentary-team-lookup";
+import { extractTeamHintsFromTitle, formatCommentaryTitleFromCodes } from "@/lib/commentary-team-lookup";
 import { getSMTeamRostersForHints, isSportMonksConfigured } from "@/lib/sportmonks";
 
 export interface MatchContextPlayer {
@@ -83,7 +83,11 @@ export async function getCommentarySessionMatchContext(sessionId: string | null)
   // and fetch their rosters from SportMonks. This enriches the context even
   // for test sessions that aren't tied to a real live match.
   if (isSportMonksConfigured()) {
-    const hints = extractTeamHintsFromTitle(commentarySession.matchName);
+    const canonicalTitle =
+      match?.teamInfo && match.teamInfo.length >= 2
+        ? formatCommentaryTitleFromCodes(match.teamInfo[0].shortname, match.teamInfo[1].shortname)
+        : commentarySession.matchName;
+    const hints = extractTeamHintsFromTitle(canonicalTitle);
     if (hints.length > 0) {
       const titleSquads = await getSMTeamRostersForHints(hints);
       for (const squad of titleSquads) addPlayersFromSquad(squad);

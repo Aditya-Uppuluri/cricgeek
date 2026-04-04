@@ -671,72 +671,83 @@ export async function getSMTeamRostersForHints(
 ): Promise<Squad[]> {
   if (!isSportMonksConfigured() || teamHints.length === 0) return [];
 
-  // Wide window: 90 days back (covers full IPL season) + 14 days ahead
-  const now = new Date();
-  const past = new Date(now);
-  past.setDate(now.getDate() - 90);
-  const future = new Date(now);
-  future.setDate(now.getDate() + 14);
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const [live, upcoming, recent] = await Promise.all([
+    getSMLivescores(),
+    getSMUpcoming(),
+    getSMRecentResults(),
+  ]);
 
-  // Lightweight fixture list — just team info, no lineup (small response)
-  const fixtures = await smFetch<SMFixture[]>(
-    "/fixtures",
-    { include: "localteam,visitorteam", "filter[starts_between]": `${fmt(past)},${fmt(future)}` },
-    { revalidateSeconds: 3_600 }
-  );
+  const fixtures = [...(live ?? []), ...(upcoming ?? []), ...(recent ?? [])];
+  if (fixtures.length === 0) return [];
 
-  if (!fixtures || fixtures.length === 0) return [];
+  const uniqueFixtures = new Map<string, Match>();
+  for (const fixture of fixtures) {
+    uniqueFixtures.set(fixture.id, fixture);
+  }
 
-  // Sort most-recent first
-  const sorted = [...fixtures].sort((a, b) =>
-    (b.starting_at ?? "").localeCompare(a.starting_at ?? "")
-  );
+  const sorted = [...uniqueFixtures.values()].sort((left, right) => {
+    const leftLive = left.matchStarted && !left.matchEnded;
+    const rightLive = right.matchStarted && !right.matchEnded;
+    if (leftLive !== rightLive) return leftLive ? -1 : 1;
+    return new Date(right.dateTimeGMT || right.date).getTime() - new Date(left.dateTimeGMT || left.date).getTime();
+  });
 
-  // For each hint find the most recent fixture that involves that team
-  const hintToFixtureId = new Map<string, number>();
+  const normalizedHints = [...new Set(teamHints.map((hint) => hint.toLowerCase()))];
+  let targetFixture: Match | null = null;
+
   for (const fixture of sorted) {
-    for (const hint of teamHints) {
-      if (hintToFixtureId.has(hint)) continue;
-      const local = fixture.localteam;
-      const visitor = fixture.visitorteam;
-      const matchesTeam = (team: SMTeam | undefined) =>
-        team &&
-        (team.code?.toLowerCase() === hint ||
-          team.name?.toLowerCase().includes(hint));
-      if (matchesTeam(local) || matchesTeam(visitor)) {
-        hintToFixtureId.set(hint, fixture.id);
-      }
-    }
-    if (hintToFixtureId.size === teamHints.length) break; // found all
-  }
-
-  if (hintToFixtureId.size === 0) return [];
-
-  // Deduplicate fixture IDs then fetch their full squads in parallel
-  const uniqueIds = [...new Set(hintToFixtureId.values())];
-  const squadResults = await Promise.all(
-    uniqueIds.map((id) => getSMSquads(String(id), { fresh: false }))
-  );
-
-  // Collect only the squads that match a hint (skip opposing team if not hinted)
-  const result: Squad[] = [];
-  const addedNames = new Set<string>();
-
-  for (const squads of squadResults) {
-    if (!squads) continue;
-    for (const squad of squads) {
-      const nameL = squad.teamName?.toLowerCase() ?? "";
-      const codeL = squad.shortname?.toLowerCase() ?? "";
-      const matches = teamHints.some(
-        (h) => codeL === h || codeL.startsWith(h) || nameL.includes(h)
-      );
-      if (matches && !addedNames.has(nameL)) {
-        addedNames.add(nameL);
-        result.push(squad);
-      }
+    const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
+    const allMatch = normalizedHints.every((hint) => codes.includes(hint));
+    if (allMatch) {
+      targetFixture = fixture;
+      break;
     }
   }
 
-  return result;
+  if (!targetFixture) {
+    const now = new Date();
+    const past = new Date(now);
+    past.setDate(now.getDate() - 90);
+    const future = new Date(now);
+    future.setDate(now.getDate() + 30);
+    const fmt = (d: Date) => d.toISOString().split("T")[0];
+
+    const rawFixtures = await smFetch<SMFixture[]>(
+      "/fixtures",
+      {
+        include: "localteam,visitorteam,runs,league,venue",
+        "filter[starts_between]": `${fmt(past)},${fmt(future)}`,
+      },
+      { revalidateSeconds: 3600 }
+    );
+
+    if (rawFixtures && rawFixtures.length > 0) {
+      const normalizedRaw = rawFixtures
+        .map(normaliseFixture)
+        .sort(
+          (left, right) =>
+            new Date(right.dateTimeGMT || right.date).getTime() - new Date(left.dateTimeGMT || left.date).getTime()
+        );
+
+      for (const fixture of normalizedRaw) {
+        const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
+        const allMatch = normalizedHints.every((hint) => codes.includes(hint));
+        if (allMatch) {
+          targetFixture = fixture;
+          break;
+        }
+      }
+    }
+  }
+
+  if (!targetFixture) {
+    return [];
+  }
+
+  const squads = await getSMSquads(targetFixture.id, { fresh: false });
+  if (!squads) {
+    return [];
+  }
+
+  return squads.filter((squad) => normalizedHints.includes(squad.shortname.toLowerCase()));
 }
