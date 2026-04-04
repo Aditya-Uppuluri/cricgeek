@@ -3,11 +3,18 @@ import "server-only";
 import { prisma } from "@/lib/db";
 import { getMatchInfo, getMatchSquad } from "@/lib/cricket-api";
 
+export interface MatchContextPlayer {
+  name: string;
+  role?: string;
+  team?: string;
+}
+
 export async function getCommentarySessionMatchContext(sessionId: string | null) {
   if (!sessionId) {
     return {
       keyterms: [] as string[],
       playerNames: [] as string[],
+      players: [] as MatchContextPlayer[],
     };
   }
 
@@ -24,6 +31,7 @@ export async function getCommentarySessionMatchContext(sessionId: string | null)
     return {
       keyterms: [] as string[],
       playerNames: [] as string[],
+      players: [] as MatchContextPlayer[],
     };
   }
 
@@ -34,6 +42,7 @@ export async function getCommentarySessionMatchContext(sessionId: string | null)
 
   const terms = new Set<string>();
   const playerNames = new Set<string>();
+  const players: MatchContextPlayer[] = [];
 
   const addTerm = (value?: string | null) => {
     const term = value?.trim();
@@ -63,11 +72,44 @@ export async function getCommentarySessionMatchContext(sessionId: string | null)
       if (!name) continue;
       addTerm(name);
       playerNames.add(name);
+
+      // Normalise the role label so Qwen gets consistent terms
+      const rawRole = player.role?.trim() || "";
+      const normalisedRole = normalisePlayerRole(rawRole);
+
+      players.push({
+        name,
+        role: normalisedRole || undefined,
+        team: squad.teamName || undefined,
+      });
     }
   }
 
   return {
     keyterms: [...terms],
     playerNames: [...playerNames],
+    players,
   };
+}
+
+/**
+ * Map SportMonks / CricAPI role strings into clean labels Qwen can use.
+ * e.g. "Bowling Allrounder" → "All-rounder (Bowler)"
+ */
+function normalisePlayerRole(raw: string): string {
+  const lower = raw.toLowerCase();
+  if (!lower) return "";
+
+  if (lower.includes("wk") || lower.includes("wicket")) {
+    if (lower.includes("bat")) return "Wicket-keeper Batter";
+    return "Wicket-keeper";
+  }
+  if (lower.includes("allround") || lower.includes("all-round") || lower.includes("all round")) {
+    if (lower.includes("bowl")) return "All-rounder (Bowler)";
+    if (lower.includes("bat")) return "All-rounder (Batter)";
+    return "All-rounder";
+  }
+  if (lower.includes("bowl")) return "Bowler";
+  if (lower.includes("bat")) return "Batter";
+  return raw; // return as-is if unrecognised
 }

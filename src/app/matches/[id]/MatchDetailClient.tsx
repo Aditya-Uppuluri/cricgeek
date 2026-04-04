@@ -6,6 +6,7 @@ import type { Match, Scorecard, Commentary, Squad } from "@/types/cricket";
 import ScorecardTable from "@/components/matches/ScorecardTable";
 import CommentaryFeed from "@/components/matches/CommentaryFeed";
 import SquadList from "@/components/matches/SquadList";
+import MatchLiveCommentary from "@/components/matches/MatchLiveCommentary";
 import AdSlot from "@/components/ads/AdSlot";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +47,8 @@ export default function MatchDetailClient({
   const [lastUpdated, setLastUpdated] = useState(() => new Date().toISOString());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  // Whether the current user can start a live commentary session
+  const [canStartSession, setCanStartSession] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const isLive = liveMatch.matchStarted && !liveMatch.matchEnded;
   const isUpcoming = !liveMatch.matchStarted;
@@ -68,6 +71,19 @@ export default function MatchDetailClient({
     setRefreshError(null);
     setLastUpdated(new Date().toISOString());
   }, [commentary, match, scorecard, source, squads]);
+
+  // Check auth to know if the user can start a commentary session
+  useEffect(() => {
+    fetch("/api/auth/session")
+      .then((r) => r.json())
+      .then((data: unknown) => {
+        const user = (data as { user?: { role?: string } })?.user;
+        if (!user) return;
+        const role = user.role ?? "user";
+        setCanStartSession(role === "admin" || role === "moderator" || role === "writer" || role === "user");
+      })
+      .catch(() => { /* ignore — anonymous user */ });
+  }, []);
 
   useEffect(() => {
     if (!shouldAutoRefresh) return;
@@ -182,6 +198,15 @@ export default function MatchDetailClient({
           )}
         </div>
       </div>
+
+      {/* Inline Live Text Commentary Panel — always visible (Option A) */}
+      <MatchLiveCommentary
+        matchId={liveMatch.id}
+        matchName={liveMatch.name}
+        matchType={liveMatch.matchType}
+        isLive={isLive}
+        canStartSession={canStartSession}
+      />
 
       {/* Tabs */}
       <div className="flex gap-1 mb-6 overflow-x-auto bg-cg-dark-2 border border-gray-800 rounded-xl p-1">

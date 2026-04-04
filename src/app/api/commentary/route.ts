@@ -3,12 +3,15 @@ import { prisma } from "@/lib/db";
 import { auth } from "@/lib/auth";
 import { canCreateCommentarySession } from "@/lib/commentary-permissions";
 
-// GET /api/commentary — list sessions (optionally filter by status)
+// GET /api/commentary — list sessions (optionally filter by status and/or matchId)
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status"); // "live" | "ended" | null (all)
+  const matchId = searchParams.get("matchId"); // filter to sessions for a specific match
 
-  const where = status ? { status } : {};
+  const where: Record<string, unknown> = {};
+  if (status) where.status = status;
+  if (matchId) where.matchId = matchId;
 
   const sessions = await prisma.liveCommentarySession.findMany({
     where,
