@@ -656,3 +656,87 @@ export async function getSMRecentResults(): Promise<Match[] | null> {
 export function isSportMonksConfigured(): boolean {
   return API_TOKEN.length > 0;
 }
+
+/**
+ * Given a list of lowercase team code/name hints (e.g. ["kkr", "mi"]),
+ * searches recent and upcoming fixtures to find the most recent match
+ * involving each team, then fetches the full lineup for those fixtures
+ * and returns the matching squads.
+ *
+ * Results are cached for 1 h via Next.js fetch cache so that per-transcription
+ * calls don't hammer the SportMonks API.
+ */
+export async function getSMTeamRostersForHints(
+  teamHints: string[]
+): Promise<Squad[]> {
+  if (!isSportMonksConfigured() || teamHints.length === 0) return [];
+
+  // Wide window: 90 days back (covers full IPL season) + 14 days ahead
+  const now = new Date();
+  const past = new Date(now);
+  past.setDate(now.getDate() - 90);
+  const future = new Date(now);
+  future.setDate(now.getDate() + 14);
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+
+  // Lightweight fixture list — just team info, no lineup (small response)
+  const fixtures = await smFetch<SMFixture[]>(
+    "/fixtures",
+    { include: "localteam,visitorteam", "filter[starts_between]": `${fmt(past)},${fmt(future)}` },
+    { revalidateSeconds: 3_600 }
+  );
+
+  if (!fixtures || fixtures.length === 0) return [];
+
+  // Sort most-recent first
+  const sorted = [...fixtures].sort((a, b) =>
+    (b.starting_at ?? "").localeCompare(a.starting_at ?? "")
+  );
+
+  // For each hint find the most recent fixture that involves that team
+  const hintToFixtureId = new Map<string, number>();
+  for (const fixture of sorted) {
+    for (const hint of teamHints) {
+      if (hintToFixtureId.has(hint)) continue;
+      const local = fixture.localteam;
+      const visitor = fixture.visitorteam;
+      const matchesTeam = (team: SMTeam | undefined) =>
+        team &&
+        (team.code?.toLowerCase() === hint ||
+          team.name?.toLowerCase().includes(hint));
+      if (matchesTeam(local) || matchesTeam(visitor)) {
+        hintToFixtureId.set(hint, fixture.id);
+      }
+    }
+    if (hintToFixtureId.size === teamHints.length) break; // found all
+  }
+
+  if (hintToFixtureId.size === 0) return [];
+
+  // Deduplicate fixture IDs then fetch their full squads in parallel
+  const uniqueIds = [...new Set(hintToFixtureId.values())];
+  const squadResults = await Promise.all(
+    uniqueIds.map((id) => getSMSquads(String(id), { fresh: false }))
+  );
+
+  // Collect only the squads that match a hint (skip opposing team if not hinted)
+  const result: Squad[] = [];
+  const addedNames = new Set<string>();
+
+  for (const squads of squadResults) {
+    if (!squads) continue;
+    for (const squad of squads) {
+      const nameL = squad.teamName?.toLowerCase() ?? "";
+      const codeL = squad.shortname?.toLowerCase() ?? "";
+      const matches = teamHints.some(
+        (h) => codeL === h || codeL.startsWith(h) || nameL.includes(h)
+      );
+      if (matches && !addedNames.has(nameL)) {
+        addedNames.add(nameL);
+        result.push(squad);
+      }
+    }
+  }
+
+  return result;
+}
