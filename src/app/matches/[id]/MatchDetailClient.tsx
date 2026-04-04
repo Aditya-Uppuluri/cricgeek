@@ -199,15 +199,6 @@ export default function MatchDetailClient({
         </div>
       </div>
 
-      {/* Inline Live Text Commentary Panel — always visible (Option A) */}
-      <MatchLiveCommentary
-        matchId={liveMatch.id}
-        matchName={liveMatch.name}
-        matchType={liveMatch.matchType}
-        isLive={isLive}
-        canStartSession={canStartSession}
-      />
-
       {/* Tabs */}
       <div className="flex gap-1 mb-6 overflow-x-auto bg-cg-dark-2 border border-gray-800 rounded-xl p-1">
         {tabs.map((tab) => (
@@ -241,6 +232,29 @@ export default function MatchDetailClient({
               {isUpcoming
                 ? "The scorecard will appear here once the first innings begins."
                 : "Live scorecard data has not landed yet from the provider. This panel will update automatically."}
+            </div>
+          )}
+          {activeTab === "scorecard" && (
+            <div className="mt-6">
+              <MatchLiveCommentary
+                matchId={liveMatch.id}
+                matchName={liveMatch.name}
+                matchType={liveMatch.matchType}
+                isLive={isLive}
+                canStartSession={canStartSession}
+              />
+            </div>
+          )}
+          {activeTab === "scorecard" && hasCommentary && (
+            <div className="mt-6">
+              <CommentaryFeed commentary={liveCommentary!} />
+            </div>
+          )}
+          {activeTab === "scorecard" && !hasCommentary && (
+            <div className="mt-6 rounded-xl border border-gray-800 bg-cg-dark-2 p-6 text-sm text-gray-400">
+              {isUpcoming
+                ? "Ball-by-ball commentary will appear below the scorecard once the match goes live."
+                : "Ball-by-ball commentary has not arrived yet. We’ll keep polling the API and place it below the scorecard here."}
             </div>
           )}
 
