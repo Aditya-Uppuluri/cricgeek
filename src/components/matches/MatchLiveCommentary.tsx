@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import Link from "next/link";
-import { Radio, Mic, ArrowRight, Clock, Loader2 } from "lucide-react";
+import { Radio, Mic, ArrowRight, Loader2, Clock3 } from "lucide-react";
+import {
+  formatCommentaryTimestamp,
+  inferCommentaryBadge,
+  renderCommentaryText,
+} from "@/components/commentary/commentary-rich-text";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -233,26 +238,55 @@ export default function MatchLiveCommentary({
             </p>
           </div>
         ) : (
-          /* Entry feed */
-          <div className="space-y-1 divide-y divide-gray-800/50">
-            {entries.slice(0, MAX_ENTRIES_SHOWN).map((entry) => (
-              <div key={entry.id} className="py-2.5">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex items-start gap-2 min-w-0">
-                    {entry.overText && (
-                      <span className="shrink-0 text-xs font-mono font-bold text-cg-green bg-cg-green/10 px-1.5 py-0.5 rounded">
-                        {entry.overText}
-                      </span>
-                    )}
-                    <p className="text-sm text-gray-200 leading-relaxed">{entry.text}</p>
+          /* Entry feed — Cricbuzz style */
+          <div className="divide-y divide-gray-800/60">
+            {entries.slice(0, MAX_ENTRIES_SHOWN).map((entry) => {
+              const badge = inferCommentaryBadge(entry.text);
+              return (
+                <div key={entry.id} className="flex gap-0 hover:bg-white/[0.02] transition-colors">
+                  {/* Over / time */}
+                  <div className="w-20 shrink-0 flex flex-col items-center justify-start pt-4 pb-4 gap-2">
+                    <span className="text-lg font-semibold text-slate-300 leading-none">
+                      {entry.overText ?? "Live"}
+                    </span>
+                    <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                      <Clock3 size={10} />
+                      {formatCommentaryTimestamp(entry.createdAt)}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-1 shrink-0 text-gray-600 text-xs whitespace-nowrap">
-                    <Clock size={10} />
-                    {timeAgo(entry.createdAt)}
+                  {/* Badge */}
+                  <div className="w-14 shrink-0 flex items-start justify-center pt-4 pb-4">
+                    {badge ? (
+                      <div
+                        className={`min-w-9 h-9 rounded-md flex items-center justify-center px-2 text-sm font-bold
+                          ${badge.bgClass} ${badge.textClass}`}
+                      >
+                        {badge.label}
+                      </div>
+                    ) : (
+                      <div className="w-9 h-9 rounded-md border border-slate-800 bg-slate-950/50 flex items-center justify-center">
+                        <span className="text-slate-500 text-base leading-none">•</span>
+                      </div>
+                    )}
+                  </div>
+                  {/* Text */}
+                  <div className="flex-1 py-4 pr-4 min-w-0">
+                    <p className="text-[10px] font-semibold tracking-[0.22em] text-slate-400 uppercase mb-2">
+                      {entry.source === "voice" ? "Voice Commentary" : "Live Update"}
+                      {entry.overText && (
+                        <span className="ml-2 text-slate-500 normal-case tracking-normal font-normal">· Over {entry.overText}</span>
+                      )}
+                    </p>
+                    <p className="text-[17px] text-slate-100 leading-8">
+                      {renderCommentaryText(entry.text)}
+                    </p>
+                    <p className="mt-2 text-xs text-slate-500">
+                      Logged {timeAgo(entry.createdAt)}
+                    </p>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

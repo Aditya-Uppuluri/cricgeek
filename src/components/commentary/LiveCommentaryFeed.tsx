@@ -1,7 +1,14 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Wifi, WifiOff, ChevronDown, Clock3 } from "lucide-react";
+import { Wifi, WifiOff, ChevronUp, Clock3 } from "lucide-react";
+import {
+  formatCommentaryTimestamp,
+  getOverGroupLabel,
+  inferCommentaryBadge,
+  inferRunContribution,
+  renderCommentaryText,
+} from "@/components/commentary/commentary-rich-text";
 
 interface Entry {
   id: string;
@@ -15,174 +22,218 @@ interface LiveCommentaryFeedProps {
   sessionId: string;
   initialEntries: Entry[];
   sessionStatus: string;
+  matchName?: string;
+}
+
+function deriveLiveSummary(entries: Entry[]) {
+  const latestWithOver = entries.find((entry) => entry.overText);
+  const overGroup = getOverGroupLabel(latestWithOver?.overText ?? null);
+  const inCurrentOver = overGroup
+    ? entries.filter((entry) => getOverGroupLabel(entry.overText) === overGroup)
+    : [];
+  const overRuns = inCurrentOver.reduce((sum, entry) => sum + inferRunContribution(entry.text), 0);
+  const wickets = inCurrentOver.filter((entry) => /\bwicket\b|bowled|caught|lbw|run out\b/i.test(entry.text)).length;
+
+  return {
+    overGroup,
+    inCurrentOver,
+    overRuns,
+    wickets,
+    latestEntry: entries[0] ?? null,
+  };
 }
 
 export default function LiveCommentaryFeed({
   sessionId,
   initialEntries,
   sessionStatus,
+  matchName,
 }: LiveCommentaryFeedProps) {
   const [entries, setEntries] = useState<Entry[]>(initialEntries);
   const [connected, setConnected] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [newCount, setNewCount] = useState(0);
   const feedRef = useRef<HTMLDivElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setEntries(initialEntries);
   }, [initialEntries]);
 
-  // Connect to SSE stream
+  // SSE connection
   useEffect(() => {
     if (sessionStatus === "ended") return;
-
-    const eventSource = new EventSource(
-      `/api/commentary/${sessionId}/stream`
-    );
-
-    eventSource.addEventListener("connected", () => {
-      setConnected(true);
-    });
-
-    eventSource.addEventListener("entry", (e) => {
+    const es = new EventSource(`/api/commentary/${sessionId}/stream`);
+    es.addEventListener("connected", () => setConnected(true));
+    es.addEventListener("entry", (e) => {
       const entry: Entry = JSON.parse(e.data);
       setEntries((prev) => {
-        // Dedup by id
         if (prev.some((p) => p.id === entry.id)) return prev;
         return [entry, ...prev];
       });
-      if (!autoScroll) {
-        setNewCount((c) => c + 1);
-      }
+      if (!autoScroll) setNewCount((c) => c + 1);
     });
-
-    eventSource.onerror = () => {
-      setConnected(false);
-    };
-
-    return () => {
-      eventSource.close();
-      setConnected(false);
-    };
+    es.onerror = () => setConnected(false);
+    return () => { es.close(); setConnected(false); };
   }, [sessionId, sessionStatus, autoScroll]);
 
-  // Auto-scroll to top (newest first) when new entries arrive
   useEffect(() => {
-    if (autoScroll && feedRef.current) {
-      feedRef.current.scrollTop = 0;
-    }
+    if (autoScroll && feedRef.current) feedRef.current.scrollTop = 0;
   }, [entries, autoScroll]);
 
-  // Detect manual scroll
   const handleScroll = () => {
     if (!feedRef.current) return;
-    const isAtTop = feedRef.current.scrollTop < 10;
-    setAutoScroll(isAtTop);
-    if (isAtTop) setNewCount(0);
+    const atTop = feedRef.current.scrollTop < 10;
+    setAutoScroll(atTop);
+    if (atTop) setNewCount(0);
   };
 
   const scrollToTop = () => {
-    if (feedRef.current) {
-      feedRef.current.scrollTop = 0;
-      setAutoScroll(true);
-      setNewCount(0);
-    }
+    if (feedRef.current) { feedRef.current.scrollTop = 0; setAutoScroll(true); setNewCount(0); }
   };
 
+  const summary = deriveLiveSummary(entries);
+
   return (
-    <div className="bg-cg-dark-2 border border-gray-800 rounded-2xl overflow-hidden">
+    <div className="bg-[#11161b] border border-slate-800 rounded-[22px] overflow-hidden shadow-[0_12px_40px_rgba(0,0,0,0.28)]">
       {/* Header */}
-      <div className="px-5 py-4 bg-gradient-to-r from-cg-dark-3 to-cg-dark-2 border-b border-gray-800">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <h3 className="text-white font-bold text-lg">Live Commentary</h3>
-            <span className="text-xs text-gray-400">
-              {entries.length} {entries.length === 1 ? "entry" : "entries"}
-            </span>
+      <div className="px-5 py-4 bg-[#0f1419] border-b border-slate-800 flex items-center justify-between">
+        <div>
+          <h3 className="text-white font-semibold text-base tracking-wide">Live Commentary</h3>
+          <p className="mt-1 text-xs text-slate-400">
+            {matchName ? `${matchName} · ` : ""}{entries.length} {entries.length === 1 ? "entry" : "entries"}
+          </p>
+        </div>
+        {sessionStatus !== "ended" && (
+          <div
+            className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium
+              ${connected ? "bg-cg-green/10 text-cg-green" : "bg-red-500/10 text-red-400"}`}
+          >
+            {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
+            {connected ? "Live" : "Reconnecting…"}
           </div>
-          <div className="flex items-center gap-2">
-            {sessionStatus !== "ended" && (
-              <div className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium ${connected ? "bg-cg-green/10 text-cg-green" : "bg-red-500/10 text-red-400"}`}>
-                {connected ? <Wifi size={12} /> : <WifiOff size={12} />}
-                {connected ? "Live" : "Disconnected"}
-              </div>
-            )}
-            {sessionStatus === "ended" && (
-              <span className="text-xs px-2 py-1 rounded-full bg-gray-700/50 text-gray-400 font-medium">
-                Session Ended
-              </span>
-            )}
+        )}
+        {sessionStatus === "ended" && (
+          <span className="text-xs px-2 py-1 rounded-full bg-gray-800 text-gray-400 font-medium">
+            Ended
+          </span>
+        )}
+      </div>
+
+      {entries.length > 0 && (
+        <div className="grid gap-px border-b border-slate-800 bg-slate-800 md:grid-cols-[120px,1fr,220px]">
+          <div className="bg-[#173243] px-5 py-4">
+            <p className="text-[11px] font-semibold tracking-[0.22em] text-slate-300">OVER</p>
+            <p className="mt-1 text-3xl font-black text-white">{summary.overGroup ?? "LIVE"}</p>
+          </div>
+          <div className="bg-[#173243] px-5 py-4">
+            <p className="text-2xl font-bold text-white">
+              {summary.overRuns > 0 ? `${summary.overRuns} runs` : `${summary.inCurrentOver.length || entries.length} updates`}
+            </p>
+            <p className="mt-1 text-sm text-slate-200">
+              {summary.overGroup
+                ? `${summary.inCurrentOver.length} updates in this over${summary.wickets ? ` · ${summary.wickets} wicket${summary.wickets > 1 ? "s" : ""}` : ""}`
+                : `Latest update ${summary.latestEntry ? formatCommentaryTimestamp(summary.latestEntry.createdAt) : ""}`}
+            </p>
+          </div>
+          <div className="bg-[#173243] px-5 py-4 text-left md:text-right">
+            <p className="text-2xl font-bold text-white">{sessionStatus === "live" ? "Live" : sessionStatus}</p>
+            <p className="mt-1 text-sm text-slate-200">
+              {summary.latestEntry ? `Updated ${formatCommentaryTimestamp(summary.latestEntry.createdAt)}` : "Awaiting first entry"}
+            </p>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Feed */}
       <div
         ref={feedRef}
         onScroll={handleScroll}
-        className="max-h-[600px] overflow-y-auto relative"
+        className="max-h-[760px] overflow-y-auto relative divide-y divide-slate-800/80"
       >
         {entries.length === 0 ? (
           <div className="py-16 text-center">
-            <p className="text-gray-500 text-lg font-medium">No commentary yet</p>
-            <p className="text-gray-600 text-sm mt-1">Entries will appear here in real-time</p>
+            <p className="text-gray-500 text-sm font-medium">No commentary yet</p>
+            <p className="text-gray-600 text-xs mt-1">Entries will appear here in real-time</p>
           </div>
         ) : (
-          <div className="divide-y divide-gray-800/50">
-            {entries.map((entry, idx) => (
+          entries.map((entry, idx) => {
+            const badge = inferCommentaryBadge(entry.text);
+            return (
               <div
                 key={entry.id}
-                className={`px-5 py-4 hover:bg-gray-800/20 transition-colors ${idx === 0 ? "animate-[fadeSlideIn_0.3s_ease-out]" : ""}`}
+                className={`flex gap-0 px-2 hover:bg-white/[0.02] transition-colors
+                  ${idx === 0 ? "animate-[fadeSlideIn_0.3s_ease-out]" : ""}`}
               >
-                <div className="flex items-start gap-3">
-                  {/* Over badge */}
+                {/* Over / time column */}
+                <div className="w-20 shrink-0 flex flex-col items-center justify-start pt-5 pb-5 gap-2">
                   {entry.overText ? (
-                    <div className="w-12 h-8 rounded-lg bg-cg-green/10 border border-cg-green/20 flex items-center justify-center text-cg-green text-xs font-bold shrink-0">
+                    <span className="text-lg font-semibold text-slate-300 leading-none">
                       {entry.overText}
+                    </span>
+                  ) : (
+                    <span className="text-xs text-slate-500">{formatCommentaryTimestamp(entry.createdAt)}</span>
+                  )}
+                  <span className="inline-flex items-center gap-1 text-[10px] uppercase tracking-[0.18em] text-slate-500">
+                    <Clock3 size={10} />
+                    {formatCommentaryTimestamp(entry.createdAt)}
+                  </span>
+                </div>
+
+                {/* Badge column */}
+                <div className="w-14 shrink-0 flex items-start justify-center pt-5 pb-5">
+                  {badge ? (
+                    <div
+                      className={`min-w-9 h-9 rounded-md flex items-center justify-center px-2 text-sm font-bold
+                        ${badge.bgClass} ${badge.textClass}`}
+                    >
+                      {badge.label}
                     </div>
                   ) : (
-                    <div className="w-12 h-8 rounded-lg bg-gray-800 flex items-center justify-center shrink-0">
-                      <span className="text-gray-600 text-xs">•</span>
+                    <div className="w-9 h-9 rounded-md border border-slate-800 bg-slate-950/50 flex items-center justify-center">
+                      <span className="text-slate-500 text-base leading-none">•</span>
                     </div>
                   )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-white text-sm leading-relaxed">{entry.text}</p>
-                    <div className="flex items-center gap-2 mt-2 flex-wrap">
-                      <span className="inline-flex items-center gap-1 rounded-full border border-gray-700 bg-gray-800/80 px-2 py-0.5 text-xs text-gray-300">
-                        <Clock3 size={11} />
-                        {new Date(entry.createdAt).toLocaleString("en-IN", {
-                          day: "2-digit",
-                          month: "short",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                          second: "2-digit",
-                        })}
-                      </span>
-                      {entry.source === "voice" && (
-                        <span className="text-xs px-1.5 py-0.5 rounded bg-purple-500/10 text-purple-400 font-medium">
-                          🎙️ Voice
-                        </span>
-                      )}
-                    </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex-1 py-5 pr-5 min-w-0">
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <p className="text-[11px] font-semibold tracking-[0.22em] text-slate-400 uppercase">
+                      {entry.source === "voice" ? "Voice Commentary" : "Live Update"}
+                      {badge ? `, ${badge.label === "W" ? "Wicket" : `${badge.label} Runs`}` : ""}
+                    </p>
+                    <span className="rounded-full border border-slate-700 bg-slate-900/80 px-2.5 py-1 text-[11px] text-slate-300">
+                      {entry.overText ? `Over ${entry.overText}` : formatCommentaryTimestamp(entry.createdAt, true)}
+                    </span>
                   </div>
+                  <p className="text-[18px] text-slate-100 leading-9">
+                    {renderCommentaryText(entry.text)}
+                    {entry.overText && (
+                      <span className="ml-2 align-middle text-sm text-slate-500">
+                        · Logged at {formatCommentaryTimestamp(entry.createdAt)}
+                      </span>
+                    )}
+                  </p>
                 </div>
               </div>
-            ))}
-          </div>
+            );
+          })
         )}
-        <div ref={bottomRef} />
       </div>
 
-      {/* New entries indicator */}
+      {/* New entries pill */}
       {newCount > 0 && (
-        <button
-          onClick={scrollToTop}
-          className="absolute bottom-20 left-1/2 -translate-x-1/2 flex items-center gap-1.5 px-4 py-2 rounded-full bg-cg-green text-black text-sm font-bold shadow-lg shadow-cg-green/20 hover:bg-cg-green-dark transition"
-        >
-          <ChevronDown size={14} className="rotate-180" />
-          {newCount} new {newCount === 1 ? "entry" : "entries"}
-        </button>
+        <div className="relative">
+          <button
+            onClick={scrollToTop}
+            className="absolute -top-10 left-1/2 -translate-x-1/2 flex items-center gap-1.5
+              px-4 py-2 rounded-full bg-cg-green text-black text-sm font-bold
+              shadow-lg shadow-cg-green/20 hover:bg-cg-green-dark transition z-10"
+          >
+            <ChevronUp size={14} />
+            {newCount} new {newCount === 1 ? "entry" : "entries"}
+          </button>
+        </div>
       )}
     </div>
   );

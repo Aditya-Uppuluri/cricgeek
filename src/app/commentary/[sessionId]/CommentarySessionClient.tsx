@@ -129,6 +129,7 @@ export default function CommentarySessionClient({ session, isModerator }: Props)
             sessionId={session.id}
             initialEntries={entries}
             sessionStatus={status}
+            matchName={session.matchName}
           />
         </div>
       </div>
