@@ -1,0 +1,24 @@
+.git
+.next
+node_modules
+ollama-proxy/node_modules
+venv
+**/venv
+**/__pycache__
+tsconfig.tsbuildinfo
+.env
+.env.local
+.env*.local
+ai_service
+insights_service
+analysis
+frontend
+rag
+reports
+python
+cloudflare
+launchd
+ollama-proxy
+capstone cric
+cricgeek.sql
+*.pdf
