@@ -694,6 +694,7 @@ export async function getSMTeamRostersForHints(
 
   const normalizedHints = [...new Set(teamHints.map((hint) => hint.toLowerCase()))];
   let targetFixture: Match | null = null;
+  let fallbackFixtures = [...sorted];
 
   for (const fixture of sorted) {
     const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
@@ -707,9 +708,9 @@ export async function getSMTeamRostersForHints(
   if (!targetFixture) {
     const now = new Date();
     const past = new Date(now);
-    past.setDate(now.getDate() - 90);
+    past.setDate(now.getDate() - 365);
     const future = new Date(now);
-    future.setDate(now.getDate() + 30);
+    future.setDate(now.getDate() + 180);
     const fmt = (d: Date) => d.toISOString().split("T")[0];
 
     const rawFixtures = await smFetch<SMFixture[]>(
@@ -729,6 +730,15 @@ export async function getSMTeamRostersForHints(
             new Date(right.dateTimeGMT || right.date).getTime() - new Date(left.dateTimeGMT || left.date).getTime()
         );
 
+      fallbackFixtures = [...new Map(
+        [...sorted, ...normalizedRaw].map((fixture) => [fixture.id, fixture])
+      ).values()].sort((left, right) => {
+        const leftLive = left.matchStarted && !left.matchEnded;
+        const rightLive = right.matchStarted && !right.matchEnded;
+        if (leftLive !== rightLive) return leftLive ? -1 : 1;
+        return new Date(right.dateTimeGMT || right.date).getTime() - new Date(left.dateTimeGMT || left.date).getTime();
+      });
+
       for (const fixture of normalizedRaw) {
         const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
         const allMatch = normalizedHints.every((hint) => codes.includes(hint));
@@ -741,13 +751,94 @@ export async function getSMTeamRostersForHints(
   }
 
   if (!targetFixture) {
-    return [];
+    const teamSpecificSquads = new Map<string, Squad>();
+
+    for (const hint of normalizedHints) {
+      for (const fixture of fallbackFixtures) {
+        const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
+        if (!codes.includes(hint)) continue;
+
+        const squadsForFixture = await getSMSquads(fixture.id, { fresh: false });
+        if (!squadsForFixture || squadsForFixture.length === 0) continue;
+
+        const matchingSquad = squadsForFixture.find(
+          (squad) => squad.shortname.toLowerCase() === hint
+        );
+
+        if (matchingSquad && matchingSquad.players.length > 0) {
+          teamSpecificSquads.set(hint, matchingSquad);
+          break;
+        }
+      }
+    }
+
+    return normalizedHints
+      .map((hint) => teamSpecificSquads.get(hint))
+      .filter((squad): squad is Squad => Boolean(squad));
   }
 
   const squads = await getSMSquads(targetFixture.id, { fresh: false });
   if (!squads) {
-    return [];
+    const teamSpecificSquads = new Map<string, Squad>();
+
+    for (const hint of normalizedHints) {
+      for (const fixture of sorted) {
+        const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
+        if (!codes.includes(hint)) continue;
+
+        const squadsForFixture = await getSMSquads(fixture.id, { fresh: false });
+        if (!squadsForFixture || squadsForFixture.length === 0) continue;
+
+        const matchingSquad = squadsForFixture.find(
+          (squad) => squad.shortname.toLowerCase() === hint
+        );
+
+        if (matchingSquad && matchingSquad.players.length > 0) {
+          teamSpecificSquads.set(hint, matchingSquad);
+          break;
+        }
+      }
+    }
+
+    return normalizedHints
+      .map((hint) => teamSpecificSquads.get(hint))
+      .filter((squad): squad is Squad => Boolean(squad));
   }
 
-  return squads.filter((squad) => normalizedHints.includes(squad.shortname.toLowerCase()));
+  const exactMatchSquads = squads.filter((squad) =>
+    normalizedHints.includes(squad.shortname.toLowerCase())
+  );
+
+  if (exactMatchSquads.length === normalizedHints.length) {
+    return exactMatchSquads;
+  }
+
+  const resolvedSquads = new Map<string, Squad>(
+    exactMatchSquads.map((squad) => [squad.shortname.toLowerCase(), squad])
+  );
+
+  for (const hint of normalizedHints) {
+    if (resolvedSquads.has(hint)) continue;
+
+    for (const fixture of fallbackFixtures) {
+      const codes = fixture.teamInfo.map((team) => team.shortname.toLowerCase());
+      if (!codes.includes(hint)) continue;
+
+      const squadsForFixture = await getSMSquads(fixture.id, { fresh: false });
+      if (!squadsForFixture || squadsForFixture.length === 0) continue;
+
+      const matchingSquad = squadsForFixture.find(
+        (squad) => squad.shortname.toLowerCase() === hint
+      );
+
+      if (matchingSquad && matchingSquad.players.length > 0) {
+        resolvedSquads.set(hint, matchingSquad);
+        break;
+      }
+    }
+  }
+
+  return normalizedHints
+    .map((hint) => resolvedSquads.get(hint))
+    .filter((squad): squad is Squad => Boolean(squad));
 }
