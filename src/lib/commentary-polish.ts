@@ -167,7 +167,10 @@ OUTPUT RULES
 - No bullet points.
 - No quotation marks unless required by meaning.
 - Clean grammar and punctuation.
-- Remove filler words, hesitations, and duplicate fragments.
+- Remove filler words, hesitations, stutters, false starts, and duplicate fragments.
+- If the commentator repeats a word or short phrase accidentally, keep only the intended single version.
+- If the speaker trails off or speaks in broken grammar, infer the most likely intended cricket commentary and rewrite it into clean English without changing the cricket meaning.
+- Stay very close to the original speech. Improve clarity, but do not add new facts or extra analysis.
 - If tokens like PLAYER_TOKEN_1 appear, preserve them exactly.
 `.trim();
 }
@@ -228,6 +231,9 @@ Important:
 - If the transcript contains a garbled player name, do not preserve the garbled form.
 - If the sentence strongly implies a roster player, use that full name.
 - If no safe match exists, use a generic cricket role term instead of hallucinating.
+- Remove spoken disfluencies such as "I, I think", "the the", "yeah so yeah", and other repeated fragments.
+- Repair obvious grammatical mistakes caused by speech-to-text, but keep the intended meaning and tone.
+- If the transcript is broken or awkward, rewrite it into the cleanest natural commentary sentence that still says the same thing.
 
 Now output the final corrected commentary line only.
 `.trim();

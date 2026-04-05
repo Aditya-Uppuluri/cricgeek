@@ -27,6 +27,12 @@ const SPLIT_MARKERS = [
   "on the other hand",
 ] as const;
 
+const FILLER_PATTERNS = [
+  /\b(?:uh|um|erm|hmm)\b/gi,
+  /\b(?:you know|i mean|sort of|kind of)\b/gi,
+  /\b(?:basically|literally)\b/gi,
+] as const;
+
 function normalizeWhitespace(input: string): string {
   return input
     .replace(/[\u2018\u2019]/g, "'")
@@ -64,6 +70,43 @@ function normalizePunctuation(input: string): string {
     .replace(/\s*-\s*/g, " - ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function collapseRepeatedWords(text: string): string {
+  return text
+    .replace(/\b([A-Za-z]{1,20})\s+\1\b/gi, "$1")
+    .replace(/\b([A-Za-z]{1,20})\s+\1\s+\1\b/gi, "$1")
+    .replace(/\b([A-Za-z]{1,20})\s+([A-Za-z]{1,20})\s+\1\s+\2\b/gi, "$1 $2");
+}
+
+function collapseRepeatedPhrases(text: string): string {
+  return text.replace(
+    /\b([A-Za-z][A-Za-z'-]*(?:\s+[A-Za-z][A-Za-z'-]*){1,3})\s+\1\b/gi,
+    "$1"
+  );
+}
+
+function removeSpeechFillers(text: string): string {
+  let nextText = text;
+
+  for (const pattern of FILLER_PATTERNS) {
+    nextText = nextText.replace(pattern, " ");
+  }
+
+  return nextText
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,+/g, ", ")
+    .replace(/\(\s*\)/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeFalseStarts(text: string): string {
+  return text
+    .replace(/\b([A-Za-z]{2,20})\s*-\s*\1\b/gi, "$1")
+    .replace(/\b([A-Za-z]{2,20})\s+\1(?=\s+(?:is|was|will|would|can|could|should|has|have|had)\b)/gi, "$1")
+    .replace(/\b(i|we|he|she|they|it)\s+\1\b/gi, "$1")
+    .replace(/\b(the|a|an|to|of|in|on|for|with|at|from)\s+\1\b/gi, "$1");
 }
 
 function sentenceCase(text: string): string {
@@ -109,6 +152,10 @@ function cleanupCommentary(input: string, aggressive: boolean): string {
   }
 
   text = normalizeCommonCricketTerms(text);
+  text = collapseRepeatedPhrases(text);
+  text = collapseRepeatedWords(text);
+  text = normalizeFalseStarts(text);
+  text = removeSpeechFillers(text);
   text = normalizePunctuation(text);
   text = fixStandalonePronouns(text);
 
@@ -117,6 +164,7 @@ function cleanupCommentary(input: string, aggressive: boolean): string {
       .replace(/\b([A-Z]{2,5}) the\b/g, "$1. The")
       .replace(/\b([a-z]+) even though\b/gi, "$1. Even though")
       .replace(/\b([a-z]+) let's\b/gi, "$1. Let's")
+      .replace(/\b(and|but|so)\s+\1\b/gi, "$1")
       .replace(/\s+/g, " ")
       .trim();
   }
