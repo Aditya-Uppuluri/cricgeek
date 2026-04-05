@@ -37,8 +37,33 @@ function normalizeSide(text: string) {
   return text.trim().replace(/\s+/g, " ");
 }
 
-function resolveTeamCode(raw: string): string | null {
+function stripTrailingMetadata(text: string) {
+  return normalizeSide(
+    text
+      .replace(/\s+\((?:[^()]*)\)\s*$/g, "")
+      .replace(/\s+-\s+.*$/g, "")
+      .replace(/\s+—\s+.*$/g, "")
+      .replace(/\s*,\s+.*$/g, "")
+  );
+}
+
+function resolveTeamCodeFromPrefix(raw: string): string | null {
   const normalized = normalizeSide(raw);
+  const lower = normalized.toLowerCase();
+
+  for (const [name, code] of Object.entries(EXACT_NAME_TO_CODE).sort(
+    ([left], [right]) => right.length - left.length
+  )) {
+    if (lower === name || lower.startsWith(`${name} `) || lower.startsWith(`${name},`) || lower.startsWith(`${name} (`)) {
+      return code;
+    }
+  }
+
+  return null;
+}
+
+function resolveTeamCode(raw: string): string | null {
+  const normalized = stripTrailingMetadata(raw);
   const upper = normalized.toUpperCase();
 
   if (KNOWN_CODES.has(upper)) {
@@ -46,7 +71,7 @@ function resolveTeamCode(raw: string): string | null {
   }
 
   const mapped = EXACT_NAME_TO_CODE[normalized.toLowerCase()];
-  return mapped ?? null;
+  return mapped ?? resolveTeamCodeFromPrefix(raw);
 }
 
 export function extractTeamHintsFromTitle(title: string): string[] {
@@ -74,4 +99,3 @@ export function extractTeamHintsFromTitle(title: string): string[] {
 export function formatCommentaryTitleFromCodes(leftCode: string, rightCode: string) {
   return `${leftCode.toUpperCase()} vs ${rightCode.toUpperCase()}`;
 }
-
