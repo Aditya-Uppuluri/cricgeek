@@ -98,6 +98,90 @@ function getPrimaryScore(scorecard: Scorecard[] | null) {
   };
 }
 
+// ── Innings split-view with toggle tabs ──────────────────────────────────────
+
+interface InningsSplitViewProps {
+  scorecards: import("@/types/cricket").Scorecard[];
+  selectedInning: number;
+  onSelectInning: (index: number) => void;
+}
+
+function InningsSplitView({ scorecards, selectedInning, onSelectInning }: InningsSplitViewProps) {
+  const safeIndex = Math.min(selectedInning, scorecards.length - 1);
+  const active = scorecards[safeIndex];
+
+  // Extract the team name from an inning label like "Royal Challengers Bengaluru Innings 1"
+  // by stripping the trailing " Innings N" suffix.
+  function extractTeamName(inning: string): string {
+    return inning.replace(/\s+Innings\s+\d+$/i, "").trim();
+  }
+
+  // Shorten for display inside a small pill button (≤18 chars)
+  function shortLabel(name: string): string {
+    if (name.length <= 18) return name;
+    // Try to abbreviate by taking first letter of each word
+    const initials = name
+      .split(" ")
+      .map((w) => w[0])
+      .join("")
+      .toUpperCase();
+    return initials.length >= 2 && initials.length <= 5
+      ? initials
+      : name.slice(0, 16) + "…";
+  }
+
+  return (
+    <div className="overflow-hidden rounded-[24px] border border-white/8 bg-[#171a1b]">
+      {/* Innings toggle tabs */}
+      <div className="border-b border-white/8 bg-[#141718]">
+        {/* Header row with innings label + toggle tabs */}
+        <div className="flex items-center justify-between gap-4 px-5 py-3">
+          <p className="shrink-0 text-xs font-semibold uppercase tracking-[0.22em] text-[#8e887d]">
+            Innings
+          </p>
+          {scorecards.length > 1 && (
+            <div className="flex gap-1 rounded-full bg-white/[0.05] p-1">
+              {scorecards.map((card, i) => {
+                const teamName = extractTeamName(card.inning);
+                return (
+                  <button
+                    key={i}
+                    title={teamName}
+                    onClick={() => onSelectInning(i)}
+                    className={cn(
+                      "rounded-full px-3.5 py-1 text-xs font-semibold transition-all duration-200 whitespace-nowrap",
+                      i === safeIndex
+                        ? "bg-white/[0.12] text-white shadow-sm"
+                        : "text-[#8e887d] hover:text-[#c5c0b6]"
+                    )}
+                  >
+                    {shortLabel(teamName)}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Active innings hero line */}
+        <div className="px-5 pb-4">
+          <h3 className="text-[22px] font-semibold tracking-tight text-white leading-tight">
+            {active.inning}
+          </h3>
+          <p className="mt-1 text-sm font-semibold text-[#31d260]">
+            {active.totalRuns}/{active.totalWickets}{" "}
+            <span className="font-normal text-[#8e887d]">
+              ({active.totalOvers} ov)
+            </span>
+          </p>
+        </div>
+      </div>
+
+      <ScorecardTable scorecard={active} />
+    </div>
+  );
+}
+
 export default function MatchDetailClient({
   match,
   scorecard,
@@ -117,6 +201,8 @@ export default function MatchDetailClient({
   const [lastUpdated, setLastUpdated] = useState(() => new Date().toISOString());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  // Innings toggle — 0 = first innings, 1 = second innings, etc.
+  const [selectedInning, setSelectedInning] = useState(0);
   // Whether the current user can start a live commentary session
   const [canStartSession, setCanStartSession] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -435,13 +521,13 @@ export default function MatchDetailClient({
             </div>
           )}
 
-          {/* Live Tab */}
+          {/* Live Tab — innings split view */}
           {activeTab === "live" && hasScorecard && (
-            <div className="space-y-4">
-              {liveScorecard!.map((card, i) => (
-                <ScorecardTable key={i} scorecard={card} />
-              ))}
-            </div>
+            <InningsSplitView
+              scorecards={liveScorecard!}
+              selectedInning={selectedInning}
+              onSelectInning={setSelectedInning}
+            />
           )}
           {activeTab === "live" && !hasScorecard && (
             <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-6 text-sm text-gray-400">
@@ -474,13 +560,13 @@ export default function MatchDetailClient({
             </div>
           )}
 
-          {/* Scorecard Tab */}
+          {/* Scorecard Tab — innings split view */}
           {activeTab === "scorecard" && hasScorecard && (
-            <div className="space-y-4">
-              {liveScorecard!.map((card, i) => (
-                <ScorecardTable key={i} scorecard={card} />
-              ))}
-            </div>
+            <InningsSplitView
+              scorecards={liveScorecard!}
+              selectedInning={selectedInning}
+              onSelectInning={setSelectedInning}
+            />
           )}
           {activeTab === "scorecard" && !hasScorecard && (
             <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-6 text-sm text-gray-400">

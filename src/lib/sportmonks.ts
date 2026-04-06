@@ -306,7 +306,7 @@ function normaliseMatchType(raw: string | undefined | null): string {
 const INCLUDES = "localteam,visitorteam,runs,league,venue";
 const DETAIL_INCLUDES = `${INCLUDES}`;
 const SQUAD_INCLUDES = "localteam,visitorteam,lineup";
-const SCORECARD_INCLUDES = "localteam,visitorteam,runs,batting,bowling,lineup";
+const SCORECARD_INCLUDES = "localteam,visitorteam,runs,batting,bowling,lineup,scoreboards";
 const COMMENTARY_INCLUDES = "balls";
 
 /**
@@ -428,6 +428,141 @@ function buildPlayerNameIndex(lineup: unknown, localTeam?: SMTeam, visitorTeam?:
   return { playerNameById: index, teamPlayers };
 }
 
+/**
+ * SportMonks uses `score_id` / `wicket_id` as the dismissal TYPE — a numeric ID
+ * pointing to their /scores catalogue.  These are the real values confirmed from
+ * the live API (GET /scores):
+ *
+ *   54  Catch Out              → c [fielder] b [bowler]
+ *   55  Catch Out (Sub)        → c sub [fielder] b [bowler]
+ *   56  Stump Out              → st [keeper] b [bowler]
+ *   57  Stump Out (Sub)        → st sub [keeper] b [bowler]
+ *   58  Bowled                 → b [bowler]
+ *   63  Run Out                → run out ([runout_by_id])
+ *   64  Run Out (Sub)          → run out (sub, [runout_by_id])
+ *   65–68 Run Out + runs       → run out ([runout_by_id])
+ *   78  Obstructing the Field  → obstructing
+ *   79  Clean Bowled           → b [bowler]
+ *   83  LBW OUT                → lbw b [bowler]
+ *   84  Not Out / still batting → not out
+ *   85  Retired Hurt           → retired hurt
+ *   86  Hit the ball twice     → hit the ball twice
+ *   87  Hit Wicket             → hit wicket b [bowler]
+ *   138 Retired Out            → retired out
+ *   Various + Run Out combos (3, 5, 22–25, 28–29, 32, 36, 42) → run out
+ */
+
+/** Dismissal kind derived from score_id */
+type DismissalKind =
+  | "caught" | "stumped" | "bowled" | "lbw"
+  | "run out" | "hit wicket" | "retired hurt"
+  | "retired out" | "obstructing" | "hit twice"
+  | "not out" | "did not bat";
+
+function scoreIdToKind(id: number): DismissalKind | null {
+  // Catch Out
+  if (id === 54 || id === 55) return "caught";
+  // Stump Out
+  if (id === 56 || id === 57) return "stumped";
+  // Bowled (both clean and generic bowled)
+  if (id === 58 || id === 79) return "bowled";
+  // Run Out — all variants
+  if ([3, 5, 22, 23, 24, 25, 28, 29, 32, 36, 42, 63, 64, 65, 66, 67, 68].includes(id)) return "run out";
+  // LBW
+  if (id === 83) return "lbw";
+  // Hit Wicket
+  if (id === 87) return "hit wicket";
+  // Obstructing
+  if (id === 78) return "obstructing";
+  // Hit the ball twice
+  if (id === 86) return "hit twice";
+  // Retired Hurt (not a wicket, but displayed)
+  if (id === 85) return "retired hurt";
+  // Retired Out
+  if (id === 138) return "retired out";
+  // Not Out / Absent (no wicket)
+  if (id === 84 || id === 80 || id === 81) return "not out";
+  return null;
+}
+
+/**
+ * Builds a cricket-shorthand dismissal string from a raw SportMonks batting row.
+ *
+ * Key fields (all confirmed from live API):
+ *   score_id / wicket_id      — dismissal TYPE (numeric, see scoreIdToKind)
+ *   bowling_player_id         — bowler who took the wicket
+ *   catch_stump_player_id     — fielder/keeper for catches & stumpings
+ *   runout_by_id              — fielder who ran the batter out
+ *   active                    — true if batter is currently at crease
+ *
+ * All player IDs are resolved via playerNameById (built from lineup include).
+ */
+function buildDismissalString(
+  raw: Record<string, unknown>,
+  playerNameById: Map<string, string>
+): string {
+  // Still at the crease
+  if (raw.active === true) return "batting";
+
+  // Determine the dismissal type from score_id or wicket_id
+  const scoreId = Number(raw.score_id ?? raw.wicket_id ?? 0);
+  const kind = scoreIdToKind(scoreId);
+
+  // score_id=0 or unrecognised + no wicket_id → did not bat
+  if (!scoreId || kind === null) return "did not bat";
+  if (kind === "not out") return "not out";
+  if (kind === "retired hurt") return "retired hurt";
+  if (kind === "retired out") return "retired out";
+
+  // Resolve player names
+  const resolveName = (id: unknown): string | null => {
+    if (!id || id === 0 || id === "0" || id === "") return null;
+    return playerNameById.get(String(id)) ?? null;
+  };
+
+  const bowler  = resolveName(raw.bowling_player_id);
+  // catch_stump_player_id is the fielder/keeper for catches and stumpings
+  const fielder = resolveName(raw.catch_stump_player_id);
+  // runout_by_id is the fielder who effected the run-out
+  const runoutBy = resolveName(raw.runout_by_id ?? raw.run_out_player_id);
+
+  switch (kind) {
+    case "caught":
+      // c & b when bowler took the catch themselves
+      if (fielder && bowler && fielder !== bowler) return `c ${fielder} b ${bowler}`;
+      if (bowler) return `c & b ${bowler}`;
+      if (fielder) return `c ${fielder}`;
+      return "caught";
+
+    case "bowled":
+      return bowler ? `b ${bowler}` : "bowled";
+
+    case "lbw":
+      return bowler ? `lbw b ${bowler}` : "lbw";
+
+    case "stumped":
+      if (fielder && bowler) return `st ${fielder} b ${bowler}`;
+      if (bowler) return `st b ${bowler}`;
+      return "stumped";
+
+    case "run out":
+      return runoutBy ? `run out (${runoutBy})` : "run out";
+
+    case "hit wicket":
+      return bowler ? `hit wicket b ${bowler}` : "hit wicket";
+
+    case "obstructing":
+      return "obstructing the field";
+
+    case "hit twice":
+      return "hit the ball twice";
+
+    default:
+      return "out";
+  }
+}
+
+
 function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
   const battingRows = Array.isArray(fixture.batting) ? fixture.batting : [];
   const bowlingRows = Array.isArray(fixture.bowling) ? fixture.bowling : [];
@@ -451,12 +586,9 @@ function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
           return normaliseBattingRow({
             ...raw,
             player_name: playerNameById.get(String(raw.player_id ?? "")) ?? raw.player_name,
-            dismissal:
-              raw.active === true
-                ? "batting"
-                : Number(raw.wicket_id ?? 0) > 0
-                  ? "out"
-                  : "did not bat",
+            // Build the real dismissal string from SportMonks fields.
+            // This MUST come after the spread so it overrides any raw.dismissal.
+            dismissal: buildDismissalString(raw, playerNameById),
           });
         });
 
