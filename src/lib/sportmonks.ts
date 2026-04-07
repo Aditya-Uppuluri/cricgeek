@@ -652,6 +652,12 @@ function decimalBallToParts(value: unknown) {
   return { over, ball };
 }
 
+function scoreboardRank(value: string | undefined): number {
+  if (!value) return 0;
+  const numeric = Number.parseInt(value.replace(/[^0-9]/g, ""), 10);
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
 function describeBallScore(score: Record<string, unknown>, ballLabel: string, bowler: string, batter: string, dismissedBatter?: string) {
   const scoreName = typeof score.name === "string" ? score.name : "";
   const runs = Number(score.runs ?? 0);
@@ -685,7 +691,7 @@ export async function getSMCommentary(id: string, options: SportMonksRequestOpti
   const balls = data.balls as Array<Record<string, unknown>>;
   if (balls.length === 0) return null;
 
-  const commentary = balls
+  const rows = balls
     .map((entry) => {
       const { over, ball } = decimalBallToParts(entry.ball);
       const batter = typeof (entry.batsman as Record<string, unknown> | undefined)?.fullname === "string"
@@ -694,29 +700,56 @@ export async function getSMCommentary(id: string, options: SportMonksRequestOpti
       const bowler = typeof (entry.bowler as Record<string, unknown> | undefined)?.fullname === "string"
         ? String((entry.bowler as Record<string, unknown>).fullname)
         : "Unknown Bowler";
-      const dismissedBatter = typeof entry.batsmanout_id === "number"
-        ? undefined
-        : undefined;
       const score = ((entry.score as Record<string, unknown> | undefined) ?? {});
       const scoreValue = Number(score.runs ?? 0) + Number(score.bye ?? 0) + Number(score.leg_bye ?? 0) + Number(score.noball_runs ?? 0);
       const ballLabel = `${over}.${ball}`;
+      const scoreboard = typeof entry.scoreboard === "string" ? entry.scoreboard : undefined;
+      const timestamp = typeof entry.updated_at === "string" ? entry.updated_at : new Date().toISOString();
+      const timestampMs = new Date(timestamp).getTime();
 
       return {
         id: String(entry.id ?? `${over}-${ball}`),
+        scoreboard,
+        scoreboardOrder: scoreboardRank(scoreboard),
+        timestampMs: Number.isFinite(timestampMs) ? timestampMs : 0,
         over,
         ball,
         score: Number.isFinite(scoreValue) ? scoreValue : 0,
         batsman: batter,
         bowler,
         commentary: describeBallScore(score, ballLabel, bowler, batter),
-        timestamp: typeof entry.updated_at === "string" ? entry.updated_at : new Date().toISOString(),
+        timestamp,
       };
-    })
+    });
+
+  const latestRow = [...rows].sort((left, right) => {
+    if (right.timestampMs !== left.timestampMs) return right.timestampMs - left.timestampMs;
+    return right.scoreboardOrder - left.scoreboardOrder;
+  })[0];
+
+  const activeScoreboard = latestRow?.scoreboard;
+  const activeRows =
+    activeScoreboard && rows.some((row) => row.scoreboard === activeScoreboard)
+      ? rows.filter((row) => row.scoreboard === activeScoreboard)
+      : rows;
+
+  const commentary = activeRows
     .sort((left, right) => {
+      if (right.timestampMs !== left.timestampMs) return right.timestampMs - left.timestampMs;
       const leftValue = left.over * 10 + left.ball;
       const rightValue = right.over * 10 + right.ball;
       return rightValue - leftValue;
-    });
+    })
+    .map(({ id, over, ball, score, batsman, bowler, commentary, timestamp }) => ({
+      id,
+      over,
+      ball,
+      score,
+      batsman,
+      bowler,
+      commentary,
+      timestamp,
+    }));
 
   return { bbb: commentary };
 }

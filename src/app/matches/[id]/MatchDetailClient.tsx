@@ -110,6 +110,7 @@ interface InningsSplitViewProps {
 function InningsSplitView({ scorecards, selectedInning, onSelectInning }: InningsSplitViewProps) {
   const safeIndex = Math.min(selectedInning, scorecards.length - 1);
   const active = scorecards[safeIndex];
+  const [pressedInning, setPressedInning] = useState<number | null>(null);
   const currentRunRate =
     active.totalOvers > 0 ? (active.totalRuns / active.totalOvers).toFixed(2) : "0.00";
 
@@ -144,6 +145,14 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
       .toUpperCase();
   }
 
+  function handleInningSelect(index: number) {
+    setPressedInning(index);
+    onSelectInning(index);
+    window.setTimeout(() => {
+      setPressedInning((current) => (current === index ? null : current));
+    }, 260);
+  }
+
   return (
     <div className="innings-stage overflow-hidden rounded-[24px] border border-white/8 bg-[#171a1b]">
       {/* Innings toggle tabs */}
@@ -166,8 +175,12 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
                   <button
                     key={i}
                     title={teamName}
-                    onClick={() => onSelectInning(i)}
-                    className={cn("innings-ball-trigger", i === safeIndex && "is-active")}
+                    onClick={() => handleInningSelect(i)}
+                    className={cn(
+                      "innings-ball-trigger",
+                      i === safeIndex && "is-active",
+                      i === pressedInning && "is-clicked"
+                    )}
                   >
                     <span className="inning-ball-toggle">
                       <span className="inning-ball-over">I{i + 1}</span>
@@ -230,7 +243,11 @@ export default function MatchDetailClient({
   const isLive = liveMatch.matchStarted && !liveMatch.matchEnded;
   const isUpcoming = !liveMatch.matchStarted;
   const shouldAutoRefresh = isLive || isUpcoming;
-  const refreshIntervalMs = isLive ? 15_000 : 60_000;
+  const refreshIntervalMs = isLive
+    ? activeTab === "commentary" || activeTab === "live"
+      ? 8_000
+      : 15_000
+    : 60_000;
 
   const tabs: { id: Tab; label: string }[] = [
     { id: "live", label: isLive ? "Live" : "Match Centre" },
