@@ -9,6 +9,7 @@ import CommentaryFeed from "@/components/matches/CommentaryFeed";
 import SquadList from "@/components/matches/SquadList";
 import MatchLiveCommentary from "@/components/matches/MatchLiveCommentary";
 import AdSlot from "@/components/ads/AdSlot";
+import CricketNewsSidebar from "@/components/news/CricketNewsSidebar";
 import { cn } from "@/lib/utils";
 
 type Tab = "live" | "scorecard" | "commentary" | "squads" | "analysis";
@@ -109,6 +110,8 @@ interface InningsSplitViewProps {
 function InningsSplitView({ scorecards, selectedInning, onSelectInning }: InningsSplitViewProps) {
   const safeIndex = Math.min(selectedInning, scorecards.length - 1);
   const active = scorecards[safeIndex];
+  const currentRunRate =
+    active.totalOvers > 0 ? (active.totalRuns / active.totalOvers).toFixed(2) : "0.00";
 
   // Extract the team name from an inning label like "Royal Challengers Bengaluru Innings 1"
   // by stripping the trailing " Innings N" suffix.
@@ -130,17 +133,33 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
       : name.slice(0, 16) + "…";
   }
 
+  function teamCode(name: string): string {
+    const words = name.split(/\s+/).filter(Boolean);
+    if (words.length === 0) return "TEAM";
+    if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+    return words
+      .map((word) => word[0])
+      .join("")
+      .slice(0, 3)
+      .toUpperCase();
+  }
+
   return (
-    <div className="overflow-hidden rounded-[24px] border border-white/8 bg-[#171a1b]">
+    <div className="innings-stage overflow-hidden rounded-[24px] border border-white/8 bg-[#171a1b]">
       {/* Innings toggle tabs */}
-      <div className="border-b border-white/8 bg-[#141718]">
+      <div className="border-b border-white/8 bg-[#141718]/90">
         {/* Header row with innings label + toggle tabs */}
-        <div className="flex items-center justify-between gap-4 px-5 py-3">
-          <p className="shrink-0 text-xs font-semibold uppercase tracking-[0.22em] text-[#8e887d]">
-            Innings
-          </p>
+        <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="shrink-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#8e887d]">
+              Innings Arena
+            </p>
+            <p className="mt-1 text-xs text-[#a79f94]">
+              Tap a ball to switch innings perspective
+            </p>
+          </div>
           {scorecards.length > 1 && (
-            <div className="flex gap-1 rounded-full bg-white/[0.05] p-1">
+            <div className="innings-ball-rack">
               {scorecards.map((card, i) => {
                 const teamName = extractTeamName(card.inning);
                 return (
@@ -148,14 +167,13 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
                     key={i}
                     title={teamName}
                     onClick={() => onSelectInning(i)}
-                    className={cn(
-                      "rounded-full px-3.5 py-1 text-xs font-semibold transition-all duration-200 whitespace-nowrap",
-                      i === safeIndex
-                        ? "bg-white/[0.12] text-white shadow-sm"
-                        : "text-[#8e887d] hover:text-[#c5c0b6]"
-                    )}
+                    className={cn("innings-ball-trigger", i === safeIndex && "is-active")}
                   >
-                    {shortLabel(teamName)}
+                    <span className="inning-ball-toggle">
+                      <span className="inning-ball-over">I{i + 1}</span>
+                      <span className="inning-ball-code">{teamCode(teamName)}</span>
+                    </span>
+                    <span className="inning-ball-name">{shortLabel(teamName)}</span>
                   </button>
                 );
               })}
@@ -164,16 +182,19 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
         </div>
 
         {/* Active innings hero line */}
-        <div className="px-5 pb-4">
-          <h3 className="text-[22px] font-semibold tracking-tight text-white leading-tight">
+        <div key={active.inning} className="innings-content-reveal px-5 pb-5">
+          <h3 className="text-[22px] font-semibold leading-tight tracking-tight text-white sm:text-[24px]">
             {active.inning}
           </h3>
-          <p className="mt-1 text-sm font-semibold text-[#31d260]">
-            {active.totalRuns}/{active.totalWickets}{" "}
-            <span className="font-normal text-[#8e887d]">
-              ({active.totalOvers} ov)
+          <div className="mt-2 flex flex-wrap items-center gap-2.5">
+            <p className="inline-flex items-center rounded-full border border-[#2f5a42] bg-[#102218] px-3 py-1 text-sm font-semibold text-[#31d260]">
+              {active.totalRuns}/{active.totalWickets}
+              <span className="ml-1.5 font-normal text-[#8e887d]">({active.totalOvers} ov)</span>
+            </p>
+            <span className="inline-flex items-center rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-medium uppercase tracking-[0.18em] text-[#d5d0c8]">
+              RR {currentRunRate}
             </span>
-          </p>
+          </div>
         </div>
       </div>
 
@@ -310,6 +331,8 @@ export default function MatchDetailClient({
     const rightPriority = scoreMatchesInningLabel(right.score, primaryScore?.inning.inning ?? "") ? 1 : 0;
     return rightPriority - leftPriority;
   });
+  const teamHint = liveMatch.teamInfo[0]?.name ?? liveMatch.teams[0] ?? undefined;
+  const tournamentHint = liveMatch.name.toUpperCase().includes("IPL") ? "IPL" : liveMatch.matchType;
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -338,7 +361,7 @@ export default function MatchDetailClient({
               {liveMatch.name}
             </p>
             <div className="mt-4 space-y-4">
-              {teamScoreRows.map(({ team, score }, index) => (
+              {teamScoreRows.map(({ team, score }) => (
                 <div key={team.shortname} className="flex items-center justify-between gap-4">
                   <div className="flex min-w-0 items-center gap-4">
                     {team.img ? (
@@ -456,8 +479,8 @@ export default function MatchDetailClient({
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
-        <div className="lg:col-span-3">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1.85fr)_minmax(320px,1fr)]">
+        <div className="min-w-0">
           {activeTab === "live" && primaryScore && (
             <div className="mb-6 overflow-hidden rounded-[24px] border border-white/8 bg-[#171a1b]">
               <div className="grid gap-px bg-white/8 lg:grid-cols-[1.3fr,0.9fr]">
@@ -686,6 +709,11 @@ export default function MatchDetailClient({
               </Link>
             </div>
           </div>
+          <CricketNewsSidebar
+            limit={6}
+            team={teamHint}
+            tournament={tournamentHint}
+          />
           <AdSlot slot="match-sidebar" format="rectangle" />
         </div>
       </div>

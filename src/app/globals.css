@@ -195,3 +195,193 @@ main {
   );
   transition: --over-progress 0.3s ease;
 }
+
+/* Match scorecard theatre */
+@keyframes inningsGlow {
+  0%,
+  100% {
+    transform: translateX(0px);
+    opacity: 0.3;
+  }
+  50% {
+    transform: translateX(10px);
+    opacity: 0.65;
+  }
+}
+
+@keyframes inningsReveal {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes ballActiveLift {
+  0% {
+    transform: translateY(0) scale(1);
+  }
+  50% {
+    transform: translateY(-6px) scale(1.06);
+  }
+  100% {
+    transform: translateY(-3px) scale(1.02);
+  }
+}
+
+@keyframes seamRotate {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rowReveal {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.innings-stage {
+  position: relative;
+  isolation: isolate;
+}
+
+.innings-stage::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 18% -8%, rgba(34, 197, 94, 0.12), transparent 42%),
+    radial-gradient(circle at 85% 8%, rgba(56, 163, 255, 0.14), transparent 35%);
+  pointer-events: none;
+  z-index: -1;
+  animation: inningsGlow 8s ease-in-out infinite;
+}
+
+.innings-content-reveal {
+  animation: inningsReveal 0.45s ease both;
+}
+
+.innings-ball-rack {
+  display: flex;
+  gap: 0.625rem;
+  overflow-x: auto;
+  padding-block-end: 0.125rem;
+}
+
+.innings-ball-trigger {
+  display: flex;
+  min-inline-size: 4.1rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  border-radius: 999px;
+  background: transparent;
+  padding: 0.15rem;
+  transition: transform 0.22s ease, filter 0.22s ease;
+}
+
+.innings-ball-trigger:hover {
+  transform: translateY(-2px);
+  filter: brightness(1.08);
+}
+
+.inning-ball-toggle {
+  position: relative;
+  display: flex;
+  block-size: 3.15rem;
+  inline-size: 3.15rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background: radial-gradient(circle at 26% 28%, #fca5a5 0%, #dc2626 42%, #7f1d1d 100%);
+  box-shadow: inset 0 -8px 16px rgba(0, 0, 0, 0.34), 0 8px 24px rgba(127, 29, 29, 0.32);
+  overflow: hidden;
+}
+
+.inning-ball-toggle::before,
+.inning-ball-toggle::after {
+  content: "";
+  position: absolute;
+  block-size: 160%;
+  inline-size: 160%;
+  border: 2px dashed rgba(255, 255, 255, 0.55);
+  border-color: rgba(255, 255, 255, 0.55) transparent transparent transparent;
+  border-radius: 999px;
+  inset-block-start: -36%;
+  inset-inline-start: -30%;
+  animation: seamRotate 8s linear infinite;
+}
+
+.inning-ball-toggle::after {
+  inset-block-start: -16%;
+  inset-inline-start: -28%;
+  transform: rotate(180deg);
+  animation-direction: reverse;
+}
+
+.inning-ball-over {
+  position: relative;
+  z-index: 1;
+  font-size: 0.54rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.inning-ball-code {
+  position: relative;
+  z-index: 1;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  color: rgba(255, 255, 255, 0.98);
+}
+
+.inning-ball-name {
+  max-inline-size: 5.5rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.66rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  color: #918a7f;
+}
+
+.innings-ball-trigger.is-active .inning-ball-toggle {
+  border-color: rgba(194, 245, 212, 0.78);
+  box-shadow:
+    inset 0 -8px 16px rgba(0, 0, 0, 0.34),
+    0 10px 28px rgba(220, 38, 38, 0.42),
+    0 0 0 4px rgba(49, 210, 96, 0.14);
+  animation: ballActiveLift 0.35s ease-out both;
+}
+
+.innings-ball-trigger.is-active .inning-ball-name {
+  color: #d5d0c8;
+}
+
+.scorecard-shell {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.015), transparent 18%),
+    linear-gradient(0deg, rgba(6, 8, 9, 0.28), rgba(6, 8, 9, 0.28));
+}
+
+.scorecard-row-reveal {
+  opacity: 0;
+  animation: rowReveal 0.35s ease forwards;
+}

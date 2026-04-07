@@ -146,8 +146,44 @@ function DismissalCell({ dismissal }: { dismissal: string }) {
 }
 
 export default function ScorecardTable({ scorecard }: ScorecardTableProps) {
+  const topBatter = [...scorecard.batting].sort((left, right) => right.r - left.r)[0];
+  const topBowler = [...scorecard.bowling].sort((left, right) => {
+    if (right.w !== left.w) return right.w - left.w;
+    return Number(left.eco) - Number(right.eco);
+  })[0];
+  const boundaryRuns = scorecard.batting.reduce(
+    (sum, entry) => sum + entry["4s"] * 4 + entry["6s"] * 6,
+    0
+  );
+
   return (
-    <div className="overflow-hidden">
+    <div className="scorecard-shell overflow-hidden">
+      <div className="grid gap-px border-b border-white/8 bg-white/8 sm:grid-cols-3">
+        <div className="bg-[#15191a] px-5 py-3.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8e887d]">Top Batter</p>
+          <p className="mt-1 text-base font-semibold text-white">
+            {topBatter?.batsman.name ?? "--"}
+          </p>
+          <p className="text-xs text-[#b8b2a7]">
+            {topBatter ? `${topBatter.r} (${topBatter.b})` : "Awaiting data"}
+          </p>
+        </div>
+        <div className="bg-[#15191a] px-5 py-3.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8e887d]">Top Bowler</p>
+          <p className="mt-1 text-base font-semibold text-white">
+            {topBowler?.bowler.name ?? "--"}
+          </p>
+          <p className="text-xs text-[#b8b2a7]">
+            {topBowler ? `${topBowler.w}/${topBowler.r} · Econ ${topBowler.eco}` : "Awaiting data"}
+          </p>
+        </div>
+        <div className="bg-[#15191a] px-5 py-3.5">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.2em] text-[#8e887d]">Boundary Pressure</p>
+          <p className="mt-1 text-base font-semibold text-white">{boundaryRuns} runs</p>
+          <p className="text-xs text-[#b8b2a7]">from fours and sixes</p>
+        </div>
+      </div>
+
       {/* Batting */}
       <div className="overflow-x-auto">
         <table className="w-full text-sm">
@@ -163,10 +199,11 @@ export default function ScorecardTable({ scorecard }: ScorecardTableProps) {
             </tr>
           </thead>
           <tbody>
-            {scorecard.batting.map((entry) => (
+            {scorecard.batting.map((entry, index) => (
               <tr
                 key={entry.batsman.id}
-                className="border-b border-white/6 hover:bg-white/[0.025] transition-colors"
+                className="scorecard-row-reveal border-b border-white/6 transition-colors hover:bg-white/[0.025]"
+                style={{ animationDelay: `${index * 45}ms` }}
               >
                 <td className="px-5 py-3 text-white font-semibold whitespace-nowrap">
                   {entry.batsman.name}
@@ -178,7 +215,9 @@ export default function ScorecardTable({ scorecard }: ScorecardTableProps) {
                   <DismissalCell dismissal={entry.dismissal} />
                 </td>
                 <td className="px-3 py-3 text-center font-bold text-white">
-                  {entry.r}
+                  <span className="inline-flex min-w-9 items-center justify-center rounded-full border border-white/10 bg-white/[0.05] px-2 py-0.5">
+                    {entry.r}
+                  </span>
                 </td>
                 <td className="px-3 py-3 text-center text-[#c5c0b6]">{entry.b}</td>
                 <td className="px-3 py-3 text-center text-[#c5c0b6]">
@@ -187,7 +226,11 @@ export default function ScorecardTable({ scorecard }: ScorecardTableProps) {
                 <td className="px-3 py-3 text-center text-[#c5c0b6]">
                   {entry["6s"]}
                 </td>
-                <td className="px-3 py-3 text-center text-[#c5c0b6]">{entry.sr}</td>
+                <td
+                  className={`px-3 py-3 text-center ${Number(entry.sr) >= 170 ? "font-semibold text-[#6ce38f]" : "text-[#c5c0b6]"}`}
+                >
+                  {entry.sr}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -219,10 +262,11 @@ export default function ScorecardTable({ scorecard }: ScorecardTableProps) {
             </tr>
           </thead>
           <tbody>
-            {scorecard.bowling.map((entry) => (
+            {scorecard.bowling.map((entry, index) => (
               <tr
                 key={entry.bowler.id}
-                className="border-b border-white/6 hover:bg-white/[0.025] transition-colors"
+                className="scorecard-row-reveal border-b border-white/6 transition-colors hover:bg-white/[0.025]"
+                style={{ animationDelay: `${index * 45 + 80}ms` }}
               >
                 <td className="px-5 py-3 font-semibold text-white whitespace-nowrap">
                   {entry.bowler.name}
@@ -240,10 +284,11 @@ export default function ScorecardTable({ scorecard }: ScorecardTableProps) {
                   <span
                     className={
                       entry.w > 0
-                        ? "font-bold text-[#31d260]"
+                        ? "inline-flex items-center gap-1 font-bold text-[#31d260]"
                         : "text-[#c5c0b6]"
                     }
                   >
+                    {entry.w > 0 && <span className="h-1.5 w-1.5 rounded-full bg-[#31d260] animate-pulse" />}
                     {entry.w}
                   </span>
                 </td>
