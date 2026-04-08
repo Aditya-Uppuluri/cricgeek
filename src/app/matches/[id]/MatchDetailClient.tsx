@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import Link from "next/link";
 import { BarChart3, ChevronRight, Radio, RefreshCw } from "lucide-react";
 import type { Match, Scorecard, Commentary, Squad } from "@/types/cricket";
@@ -120,20 +120,6 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
     return inning.replace(/\s+Innings\s+\d+$/i, "").trim();
   }
 
-  // Shorten for display inside a small pill button (≤18 chars)
-  function shortLabel(name: string): string {
-    if (name.length <= 18) return name;
-    // Try to abbreviate by taking first letter of each word
-    const initials = name
-      .split(" ")
-      .map((w) => w[0])
-      .join("")
-      .toUpperCase();
-    return initials.length >= 2 && initials.length <= 5
-      ? initials
-      : name.slice(0, 16) + "…";
-  }
-
   function teamCode(name: string): string {
     const words = name.split(/\s+/).filter(Boolean);
     if (words.length === 0) return "TEAM";
@@ -143,6 +129,33 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
       .join("")
       .slice(0, 3)
       .toUpperCase();
+  }
+
+  function resolveTeamBranding(name: string): { abbr: string; color: string } {
+    const normalized = name.toLowerCase();
+    const knownTeams: Array<{ match: string; abbr: string; color: string }> = [
+      { match: "royal challengers", abbr: "RCB", color: "#ec1c24" },
+      { match: "mumbai indians", abbr: "MI", color: "#005da0" },
+      { match: "chennai super kings", abbr: "CSK", color: "#fdb913" },
+      { match: "rajasthan royals", abbr: "RR", color: "#ea1a85" },
+      { match: "kolkata knight riders", abbr: "KKR", color: "#3a225d" },
+      { match: "sunrisers hyderabad", abbr: "SRH", color: "#ff822a" },
+      { match: "delhi capitals", abbr: "DC", color: "#17479e" },
+      { match: "lucknow super giants", abbr: "LSG", color: "#00a3e0" },
+      { match: "gujarat titans", abbr: "GT", color: "#1c2c5b" },
+      { match: "punjab kings", abbr: "PBKS", color: "#d71920" },
+      { match: "india", abbr: "IND", color: "#1a4da1" },
+      { match: "australia", abbr: "AUS", color: "#f7c948" },
+      { match: "england", abbr: "ENG", color: "#c8102e" },
+      { match: "south africa", abbr: "SA", color: "#007749" },
+      { match: "new zealand", abbr: "NZ", color: "#111111" },
+      { match: "pakistan", abbr: "PAK", color: "#0e7c3b" },
+    ];
+
+    const matched = knownTeams.find((team) => normalized.includes(team.match));
+    if (matched) return { abbr: matched.abbr, color: matched.color };
+
+    return { abbr: teamCode(name), color: "#22C55E" };
   }
 
   function handleInningSelect(index: number) {
@@ -171,22 +184,20 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
             <div className="innings-ball-rack">
               {scorecards.map((card, i) => {
                 const teamName = extractTeamName(card.inning);
+                const branding = resolveTeamBranding(teamName);
                 return (
                   <button
                     key={i}
                     title={teamName}
                     onClick={() => handleInningSelect(i)}
+                    style={{ "--team-accent": branding.color } as CSSProperties}
                     className={cn(
                       "innings-ball-trigger",
                       i === safeIndex && "is-active",
                       i === pressedInning && "is-clicked"
                     )}
                   >
-                    <span className="inning-ball-toggle">
-                      <span className="inning-ball-over">I{i + 1}</span>
-                      <span className="inning-ball-code">{teamCode(teamName)}</span>
-                    </span>
-                    <span className="inning-ball-name">{shortLabel(teamName)}</span>
+                    <span className="inning-ball-code">{branding.abbr}</span>
                   </button>
                 );
               })}

@@ -300,11 +300,7 @@ export async function polishCommentaryForSubmission(
       restoreProtectedNames(normalizeModelOutput(candidate), protectedNames)
     );
 
-    if (!polished) {
-      return fallback;
-    }
-
-    if (polished.length > fallback.length * 2.5) {
+    if (!polished) {    if (polished.length > fallback.length * 2.5) {
       return fallback;
     }
 
