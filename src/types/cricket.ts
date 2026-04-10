@@ -82,6 +82,22 @@ export interface BallByBall {
   bowler: string;
   commentary: string;
   timestamp: string;
+  scoreboard?: string;
+  batsmanId?: string | null;
+  bowlerId?: string | null;
+  batsmanRuns?: number;
+  extras?: number;
+  byes?: number;
+  legByes?: number;
+  noBallRuns?: number;
+  wideRuns?: number;
+  isBoundary?: boolean;
+  isFour?: boolean;
+  isSix?: boolean;
+  isWicket?: boolean;
+  wicketType?: string | null;
+  dismissedBatter?: string | null;
+  legalBall?: boolean;
 }
 
 export interface Squad {

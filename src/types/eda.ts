@@ -106,14 +106,95 @@ export interface LivePressureSnapshot {
   bowlingTeam: string;
   runs: number;
   wickets: number;
+  wicketsInHand: number;
   overs: number;
   target: number | null;
   currentRunRate: number;
   requiredRunRate: number | null;
   projectedTotal: number;
+  ballsRemaining: number | null;
   pressureIndex: number;
   momentumIndex: number;
   phase: string;
+}
+
+export interface LiveTimelinePoint {
+  id: string;
+  label: string;
+  over: number;
+  ball: number;
+  value: number;
+  secondaryValue?: number | null;
+  note: string;
+  isWicket?: boolean;
+}
+
+export interface LiveBarDatum {
+  label: string;
+  value: number;
+  note: string;
+}
+
+export interface LiveImpactDatum {
+  label: string;
+  actual: number;
+  expected: number;
+  delta: number;
+  sample: number;
+  note: string;
+}
+
+export interface LivePartnershipDatum {
+  label: string;
+  pair: string;
+  runs: number;
+  balls: number;
+  influence: number;
+  note: string;
+}
+
+export interface LiveScenarioDatum {
+  label: string;
+  projectedTotal: number;
+  winProbability: number;
+  note: string;
+}
+
+export interface LiveHeatmapCell {
+  over: number;
+  ball: number;
+  runs: number;
+  pressure: number;
+  label: string;
+  isDot: boolean;
+  isWicket: boolean;
+}
+
+export interface LiveMatchupCell {
+  batter: string;
+  bowler: string;
+  runs: number;
+  balls: number;
+  dismissals: number;
+  dotPct: number;
+  strikeRate: number;
+  threat: number;
+}
+
+export interface LiveAnalyticsBundle {
+  ballWinProbability: LiveTimelinePoint[];
+  matchControlSwing: LiveTimelinePoint[];
+  pressureTimeline: LiveTimelinePoint[];
+  topTurningBalls: LiveBarDatum[];
+  topTurningOvers: LiveBarDatum[];
+  batterImpact: LiveImpactDatum[];
+  bowlerImpact: LiveImpactDatum[];
+  bowlerRunsSaved: LiveImpactDatum[];
+  partnershipInfluence: LivePartnershipDatum[];
+  counterfactuals: LiveScenarioDatum[];
+  requiredVsActualRate: LiveTimelinePoint[];
+  dotBallHeatmap: LiveHeatmapCell[];
+  matchupMatrix: LiveMatchupCell[];
 }
 
 export interface LiveEdaReport {
@@ -122,6 +203,9 @@ export interface LiveEdaReport {
   cards: PostMatchEdaCard[];
   summary: string;
   advisor: InsightsAdvisorResponse | null;
+  pollIntervalSeconds: number;
+  ballsTracked: number;
+  analytics: LiveAnalyticsBundle;
   confidence: EdaConfidence;
   freshness: EdaFreshness;
   warnings: string[];

@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import { Activity, Loader2, TriangleAlert } from "lucide-react";
 import EdaCards from "@/components/matches/EdaCards";
+import LiveEdaCharts from "@/components/matches/LiveEdaCharts";
 import type { LiveEdaReport } from "@/types/eda";
+import { LIVE_EDA_POLL_INTERVAL_SECONDS } from "@/lib/eda/live";
 
 type LiveEdaPanelProps = {
   matchId: string;
   enabled: boolean;
-  refreshToken?: string;
 };
 
 async function readJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -24,10 +25,28 @@ async function readJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   return payload as T;
 }
 
-export default function LiveEdaPanel({ matchId, enabled, refreshToken }: LiveEdaPanelProps) {
+export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
   const [report, setReport] = useState<LiveEdaReport | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const loadReport = useEffectEvent(async (signal?: AbortSignal) => {
+    setLoading(true);
+
+    try {
+      const payload = await readJson<LiveEdaReport>(`/api/eda/live?matchId=${encodeURIComponent(matchId)}`, {
+        cache: "no-store",
+        signal,
+      });
+
+      setReport(payload);
+      setError(null);
+    } catch (requestError) {
+      if (requestError instanceof Error && requestError.name === "AbortError") return;
+      setError(requestError instanceof Error ? requestError.message : "Unable to load live intelligence right now.");
+    } finally {
+      setLoading(false);
+    }
+  });
 
   useEffect(() => {
     if (!enabled) {
@@ -38,38 +57,24 @@ export default function LiveEdaPanel({ matchId, enabled, refreshToken }: LiveEda
     }
 
     const controller = new AbortController();
-    let cancelled = false;
-
-    async function loadReport() {
-      setLoading(true);
-
-      try {
-        const payload = await readJson<LiveEdaReport>(`/api/eda/live?matchId=${encodeURIComponent(matchId)}`, {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-
-        if (cancelled) return;
-        setReport(payload);
-        setError(null);
-      } catch (requestError) {
-        if (cancelled) return;
-        if (requestError instanceof Error && requestError.name === "AbortError") return;
-        setError(requestError instanceof Error ? requestError.message : "Unable to load live intelligence right now.");
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void loadReport();
+    void loadReport(controller.signal);
 
     return () => {
-      cancelled = true;
       controller.abort();
     };
-  }, [enabled, matchId, refreshToken]);
+  }, [enabled, matchId]);
+
+  useEffect(() => {
+    if (!enabled) return;
+
+    const interval = window.setInterval(() => {
+      void loadReport();
+    }, LIVE_EDA_POLL_INTERVAL_SECONDS * 1000);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [enabled, matchId]);
 
   if (!enabled) {
     return (
@@ -98,6 +103,14 @@ export default function LiveEdaPanel({ matchId, enabled, refreshToken }: LiveEda
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
           {loading ? <Loader2 size={14} className="animate-spin" /> : null}
+          <span className="rounded-full bg-white/5 px-3 py-1.5">
+            Auto-refresh every {report?.pollIntervalSeconds ?? LIVE_EDA_POLL_INTERVAL_SECONDS}s
+          </span>
+          {report ? (
+            <span className="rounded-full bg-white/5 px-3 py-1.5">
+              {report.ballsTracked} balls tracked
+            </span>
+          ) : null}
           {report ? (
             <span className="rounded-full bg-white/5 px-3 py-1.5">
               Confidence {Math.round(report.confidence.score)}% | {report.confidence.label}
@@ -140,6 +153,7 @@ export default function LiveEdaPanel({ matchId, enabled, refreshToken }: LiveEda
           </div>
 
           <EdaCards cards={report.cards} />
+          <LiveEdaCharts analytics={report.analytics} />
 
           {report.warnings.length > 0 ? (
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-4">

@@ -681,6 +681,30 @@ function describeBallScore(score: Record<string, unknown>, ballLabel: string, bo
   return `${ballLabel} ${bowler} to ${batter}, ${runs} runs.`;
 }
 
+function getPersonName(record: unknown): string | null {
+  const value = record as Record<string, unknown> | undefined;
+  if (!value) return null;
+
+  const fullName =
+    typeof value.fullname === "string"
+      ? value.fullname
+      : [value.firstname, value.lastname]
+          .filter((item) => typeof item === "string" && item.trim())
+          .join(" ");
+
+  return fullName || null;
+}
+
+function getDismissedBatter(entry: Record<string, unknown>): string | null {
+  return (
+    getPersonName(entry.wicket as Record<string, unknown> | undefined) ||
+    getPersonName(entry.dismissed as Record<string, unknown> | undefined) ||
+    getPersonName(entry.batsmanout as Record<string, unknown> | undefined) ||
+    getPersonName(entry.playerout as Record<string, unknown> | undefined) ||
+    null
+  );
+}
+
 export async function getSMCommentary(id: string, options: SportMonksRequestOptions = {}): Promise<Commentary | null> {
   const data = await smFetch<SMFixture>(`/fixtures/${id}`, {
     include: COMMENTARY_INCLUDES,
@@ -694,18 +718,24 @@ export async function getSMCommentary(id: string, options: SportMonksRequestOpti
   const rows = balls
     .map((entry) => {
       const { over, ball } = decimalBallToParts(entry.ball);
-      const batter = typeof (entry.batsman as Record<string, unknown> | undefined)?.fullname === "string"
-        ? String((entry.batsman as Record<string, unknown>).fullname)
-        : "Unknown Batter";
-      const bowler = typeof (entry.bowler as Record<string, unknown> | undefined)?.fullname === "string"
-        ? String((entry.bowler as Record<string, unknown>).fullname)
-        : "Unknown Bowler";
+      const batsmanRecord = entry.batsman as Record<string, unknown> | undefined;
+      const bowlerRecord = entry.bowler as Record<string, unknown> | undefined;
+      const batter = getPersonName(batsmanRecord) || "Unknown Batter";
+      const bowler = getPersonName(bowlerRecord) || "Unknown Bowler";
       const score = ((entry.score as Record<string, unknown> | undefined) ?? {});
-      const scoreValue = Number(score.runs ?? 0) + Number(score.bye ?? 0) + Number(score.leg_bye ?? 0) + Number(score.noball_runs ?? 0);
+      const batsmanRuns = Number(score.runs ?? 0);
+      const byes = Number(score.bye ?? score.byes ?? 0);
+      const legByes = Number(score.leg_bye ?? score.legbyes ?? 0);
+      const noBallRuns = Number(score.noball_runs ?? score.no_ball ?? score.noball ?? 0);
+      const wideRuns = Number(score.wide ?? score.wides ?? score.wide_runs ?? 0);
+      const extras = byes + legByes + noBallRuns + wideRuns;
+      const scoreValue = batsmanRuns + extras;
       const ballLabel = `${over}.${ball}`;
       const scoreboard = typeof entry.scoreboard === "string" ? entry.scoreboard : undefined;
       const timestamp = typeof entry.updated_at === "string" ? entry.updated_at : new Date().toISOString();
       const timestampMs = new Date(timestamp).getTime();
+      const dismissedBatter = getDismissedBatter(entry);
+      const isWicket = Boolean(score.is_wicket || score.out || entry.wicket_id);
 
       return {
         id: String(entry.id ?? `${over}-${ball}`),
@@ -717,8 +747,23 @@ export async function getSMCommentary(id: string, options: SportMonksRequestOpti
         score: Number.isFinite(scoreValue) ? scoreValue : 0,
         batsman: batter,
         bowler,
-        commentary: describeBallScore(score, ballLabel, bowler, batter),
+        commentary: describeBallScore(score, ballLabel, bowler, batter, dismissedBatter ?? undefined),
         timestamp,
+        batsmanId: batsmanRecord?.id ? String(batsmanRecord.id) : null,
+        bowlerId: bowlerRecord?.id ? String(bowlerRecord.id) : null,
+        batsmanRuns: Number.isFinite(batsmanRuns) ? batsmanRuns : 0,
+        extras: Number.isFinite(extras) ? extras : 0,
+        byes: Number.isFinite(byes) ? byes : 0,
+        legByes: Number.isFinite(legByes) ? legByes : 0,
+        noBallRuns: Number.isFinite(noBallRuns) ? noBallRuns : 0,
+        wideRuns: Number.isFinite(wideRuns) ? wideRuns : 0,
+        isBoundary: Boolean(score.four || score.six || batsmanRuns === 4 || batsmanRuns === 6),
+        isFour: Boolean(score.four || batsmanRuns === 4),
+        isSix: Boolean(score.six || batsmanRuns === 6),
+        isWicket,
+        wicketType: typeof score.name === "string" && isWicket ? score.name : null,
+        dismissedBatter,
+        legalBall: wideRuns === 0 && noBallRuns === 0,
       };
     });
 
@@ -740,7 +785,7 @@ export async function getSMCommentary(id: string, options: SportMonksRequestOpti
       const rightValue = right.over * 10 + right.ball;
       return rightValue - leftValue;
     })
-    .map(({ id, over, ball, score, batsman, bowler, commentary, timestamp }) => ({
+    .map(({ id, over, ball, score, batsman, bowler, commentary, timestamp, scoreboard, batsmanId, bowlerId, batsmanRuns, extras, byes, legByes, noBallRuns, wideRuns, isBoundary, isFour, isSix, isWicket, wicketType, dismissedBatter, legalBall }) => ({
       id,
       over,
       ball,
@@ -749,6 +794,22 @@ export async function getSMCommentary(id: string, options: SportMonksRequestOpti
       bowler,
       commentary,
       timestamp,
+      scoreboard,
+      batsmanId,
+      bowlerId,
+      batsmanRuns,
+      extras,
+      byes,
+      legByes,
+      noBallRuns,
+      wideRuns,
+      isBoundary,
+      isFour,
+      isSix,
+      isWicket,
+      wicketType,
+      dismissedBatter,
+      legalBall,
     }));
 
   return { bbb: commentary };

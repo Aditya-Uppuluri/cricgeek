@@ -1,0 +1,714 @@
+import type { BallByBall, Match, Scorecard } from "@/types/cricket";
+import type {
+  HistoricalVenueSnapshot,
+  LiveAnalyticsBundle,
+  LiveBarDatum,
+  LiveHeatmapCell,
+  LiveImpactDatum,
+  LiveMatchupCell,
+  LivePartnershipDatum,
+  LivePressureSnapshot,
+  LiveScenarioDatum,
+  LiveTimelinePoint,
+} from "@/types/eda";
+import { clamp, getScheduledOvers, inferPhase, round } from "@/lib/eda/common";
+
+type BallState = {
+  ball: BallByBall;
+  label: string;
+  legalBalls: number;
+  oversUsed: number;
+  cumulativeRuns: number;
+  cumulativeWickets: number;
+  currentRunRate: number;
+  requiredRate: number | null;
+  pressure: number;
+  winProbability: number;
+  control: number;
+  expectedRuns: number;
+  projectedTotal: number;
+  deltaWinProbability: number;
+  impactScore: number;
+};
+
+function defaultParTotal(matchType: string) {
+  const scheduledOvers = getScheduledOvers(matchType);
+  if (scheduledOvers === 10) return 102;
+  if (scheduledOvers === 20) return 168;
+  if (scheduledOvers === 50) return 286;
+  return 240;
+}
+
+function phaseBaseRunRate(matchType: string, phase: string) {
+  const scheduledOvers = getScheduledOvers(matchType);
+
+  if (scheduledOvers === 10) {
+    if (phase === "Powerplay") return 9.8;
+    if (phase === "Middle") return 8.9;
+    return 11.2;
+  }
+
+  if (scheduledOvers === 20) {
+    if (phase === "Powerplay") return 8.6;
+    if (phase === "Middle") return 7.4;
+    return 10.6;
+  }
+
+  if (scheduledOvers === 50) {
+    if (phase === "Powerplay") return 5.6;
+    if (phase === "Middle") return 5.1;
+    return 7.1;
+  }
+
+  if (phase.includes("Opening")) return 3.2;
+  if (phase.includes("Old-ball")) return 3.8;
+  return 3.4;
+}
+
+function statePressureIndex(input: {
+  matchType: string;
+  runs: number;
+  wickets: number;
+  oversUsed: number;
+  target: number | null;
+  currentRunRate: number;
+  requiredRate: number | null;
+  venuePar: number | null;
+}) {
+  const scheduledOvers = getScheduledOvers(input.matchType);
+
+  if (input.target && input.requiredRate !== null) {
+    const oversRemaining = scheduledOvers !== null ? Math.max(scheduledOvers - input.oversUsed, 0) : 0;
+    return clamp(
+      45 +
+        (input.requiredRate - input.currentRunRate) * 8 +
+        input.wickets * 2.6 +
+        (oversRemaining <= 5 ? 6 : 0),
+      0,
+      100
+    );
+  }
+
+  if (scheduledOvers !== null) {
+    const parRate = (input.venuePar ?? defaultParTotal(input.matchType)) / scheduledOvers;
+    return clamp(
+      32 + Math.max(0, parRate - input.currentRunRate) * 7 + input.wickets * 3 + Math.max(0, input.oversUsed - scheduledOvers * 0.72) * 2,
+      0,
+      100
+    );
+  }
+
+  return clamp(25 + input.wickets * 4 - input.currentRunRate * 1.5, 0, 100);
+}
+
+function projectTotalAtState(input: {
+  matchType: string;
+  runs: number;
+  wickets: number;
+  oversUsed: number;
+  currentRunRate: number;
+}) {
+  const scheduledOvers = getScheduledOvers(input.matchType);
+  if (scheduledOvers === null) return input.runs;
+
+  const oversRemaining = Math.max(scheduledOvers - input.oversUsed, 0);
+  const wicketsPenalty = scheduledOvers === 50 ? input.wickets * 0.06 : input.wickets * 0.12;
+  const phaseRate = phaseBaseRunRate(input.matchType, inferPhase(input.oversUsed, input.matchType));
+  const retainedRate = Math.max(phaseRate, input.currentRunRate * Math.max(0.55, 1 - wicketsPenalty));
+
+  return clamp(
+    round(input.runs + oversRemaining * retainedRate, 0),
+    input.runs,
+    scheduledOvers === 50 ? 450 : scheduledOvers === 20 ? 260 : 180
+  );
+}
+
+function winProbabilityAtState(input: {
+  matchType: string;
+  runs: number;
+  wickets: number;
+  oversUsed: number;
+  currentRunRate: number;
+  requiredRate: number | null;
+  target: number | null;
+  projectedTotal: number;
+  venuePar: number | null;
+  venueChaseWinPct: number | null;
+  pressure: number;
+}) {
+  const scheduledOvers = getScheduledOvers(input.matchType);
+  const wicketsInHand = Math.max(0, 10 - input.wickets);
+
+  if (input.target && input.requiredRate !== null && scheduledOvers !== null) {
+    const oversRemaining = Math.max(scheduledOvers - input.oversUsed, 0);
+    const runsRemaining = Math.max(input.target - input.runs, 0);
+    if (runsRemaining <= 0) return 99;
+    if (oversRemaining <= 0) return 1;
+
+    const rateEdge = input.currentRunRate - input.requiredRate;
+    const projectionEdge = input.projectedTotal - input.target;
+    const resourceFactor = (wicketsInHand - 5) * 2.9 + oversRemaining * 0.35;
+    const venueBias = input.venueChaseWinPct !== null ? (input.venueChaseWinPct - 50) * 0.18 : 0;
+
+    return clamp(
+      round(50 + projectionEdge * 0.45 + rateEdge * 7 + resourceFactor + venueBias - input.pressure * 0.12, 1),
+      1,
+      99
+    );
+  }
+
+  const parTotal = input.venuePar ?? defaultParTotal(input.matchType);
+  const projectionEdge = input.projectedTotal - parTotal;
+  const venueBias = input.venueChaseWinPct !== null ? (50 - input.venueChaseWinPct) * 0.14 : 0;
+
+  return clamp(
+    round(50 + projectionEdge * 0.28 + wicketsInHand * 1.9 + venueBias - input.pressure * 0.1, 1),
+    4,
+    96
+  );
+}
+
+function sortBallsAscending(balls: BallByBall[]) {
+  return [...balls].sort((left, right) => {
+    const leftTime = new Date(left.timestamp).getTime();
+    const rightTime = new Date(right.timestamp).getTime();
+
+    if (leftTime !== rightTime && Number.isFinite(leftTime) && Number.isFinite(rightTime)) {
+      return leftTime - rightTime;
+    }
+
+    if (left.over !== right.over) return left.over - right.over;
+    if (left.ball !== right.ball) return left.ball - right.ball;
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function buildBallStates(
+  match: Match,
+  balls: BallByBall[],
+  snapshot: LivePressureSnapshot,
+  venue: HistoricalVenueSnapshot
+) {
+  const scheduledOvers = getScheduledOvers(match.matchType);
+  const totalBalls = scheduledOvers !== null ? scheduledOvers * 6 : null;
+  let cumulativeRuns = 0;
+  let cumulativeWickets = 0;
+  let legalBalls = 0;
+  let previousWinProbability = 50;
+
+  return sortBallsAscending(balls).map((ball) => {
+    cumulativeRuns += ball.score;
+    cumulativeWickets += ball.isWicket ? 1 : 0;
+    legalBalls += ball.legalBall === false ? 0 : 1;
+
+    const oversUsed = legalBalls > 0 ? legalBalls / 6 : 0;
+    const currentRunRate = oversUsed > 0 ? cumulativeRuns / oversUsed : 0;
+    const requiredRate =
+      snapshot.target && totalBalls !== null
+        ? Math.max(snapshot.target - cumulativeRuns, 0) / Math.max((totalBalls - legalBalls) / 6, 0.1)
+        : null;
+    const phase = inferPhase(oversUsed, match.matchType);
+    const expectedRuns = phaseBaseRunRate(match.matchType, phase) / 6;
+    const projectedTotal = projectTotalAtState({
+      matchType: match.matchType,
+      runs: cumulativeRuns,
+      wickets: cumulativeWickets,
+      oversUsed,
+      currentRunRate,
+    });
+    const pressure = statePressureIndex({
+      matchType: match.matchType,
+      runs: cumulativeRuns,
+      wickets: cumulativeWickets,
+      oversUsed,
+      target: snapshot.target,
+      currentRunRate,
+      requiredRate,
+      venuePar: venue.avgFirstInningsScore,
+    });
+    const winProbability = winProbabilityAtState({
+      matchType: match.matchType,
+      runs: cumulativeRuns,
+      wickets: cumulativeWickets,
+      oversUsed,
+      currentRunRate,
+      requiredRate,
+      target: snapshot.target,
+      projectedTotal,
+      venuePar: venue.avgFirstInningsScore,
+      venueChaseWinPct: venue.chaseWinPct,
+      pressure,
+    });
+    const deltaWinProbability = round(winProbability - previousWinProbability, 1);
+    previousWinProbability = winProbability;
+
+    return {
+      ball,
+      label: `${ball.over}.${ball.ball}`,
+      legalBalls,
+      oversUsed,
+      cumulativeRuns,
+      cumulativeWickets,
+      currentRunRate: round(currentRunRate, 2),
+      requiredRate: requiredRate !== null ? round(requiredRate, 2) : null,
+      pressure: round(pressure, 1),
+      winProbability: round(winProbability, 1),
+      control: round((winProbability - 50) * 2, 1),
+      expectedRuns: round(expectedRuns, 2),
+      projectedTotal,
+      deltaWinProbability,
+      impactScore: round(
+        Math.abs(deltaWinProbability) +
+          (ball.isWicket ? 8 : 0) +
+          (ball.isBoundary ? 2.5 : 0) +
+          (ball.score === 0 && pressure >= 60 ? 1.2 : 0),
+        1
+      ),
+    } satisfies BallState;
+  });
+}
+
+function toTimelinePoint(id: string, label: string, value: number, note: string, input?: { over?: number; ball?: number; secondaryValue?: number | null; isWicket?: boolean; }) {
+  return {
+    id,
+    label,
+    over: input?.over ?? 0,
+    ball: input?.ball ?? 0,
+    value: round(value, 1),
+    secondaryValue: input?.secondaryValue ?? null,
+    note,
+    isWicket: input?.isWicket ?? false,
+  } satisfies LiveTimelinePoint;
+}
+
+function buildRateTimeline(
+  states: BallState[],
+  match: Match,
+  venue: HistoricalVenueSnapshot
+) {
+  const scheduledOvers = getScheduledOvers(match.matchType);
+  const parRate =
+    scheduledOvers !== null
+      ? round((venue.avgFirstInningsScore ?? defaultParTotal(match.matchType)) / scheduledOvers, 2)
+      : null;
+
+  const overMap = new Map<number, BallState>();
+  for (const state of states) {
+    overMap.set(state.ball.over, state);
+  }
+
+  return [...overMap.values()].map((state) =>
+    toTimelinePoint(
+      `rate-${state.ball.over}`,
+      `${state.ball.over}`,
+      state.currentRunRate,
+      `${state.ball.over} overs: actual rate ${state.currentRunRate}${state.requiredRate !== null ? ` vs required ${state.requiredRate}` : parRate !== null ? ` vs par ${parRate}` : ""}.`,
+      {
+        over: state.ball.over,
+        ball: state.ball.ball,
+        secondaryValue: state.requiredRate ?? parRate,
+        isWicket: state.ball.isWicket,
+      }
+    )
+  );
+}
+
+function buildTurningBallBars(states: BallState[]) {
+  return [...states]
+    .sort((left, right) => right.impactScore - left.impactScore)
+    .slice(0, 6)
+    .map((state) => ({
+      label: state.label,
+      value: state.impactScore,
+      note: state.ball.commentary,
+    } satisfies LiveBarDatum));
+}
+
+function buildTurningOverBars(states: BallState[]) {
+  const overMap = new Map<number, { impact: number; runs: number; wickets: number }>();
+
+  for (const state of states) {
+    const current = overMap.get(state.ball.over) ?? { impact: 0, runs: 0, wickets: 0 };
+    current.impact += state.impactScore;
+    current.runs += state.ball.score;
+    current.wickets += state.ball.isWicket ? 1 : 0;
+    overMap.set(state.ball.over, current);
+  }
+
+  return [...overMap.entries()]
+    .map(([over, value]) => ({
+      label: `Over ${over}`,
+      value: round(value.impact, 1),
+      note: `${value.runs} runs and ${value.wickets} wicket${value.wickets === 1 ? "" : "s"} created the biggest state change in this over.`,
+    }))
+    .sort((left, right) => right.value - left.value)
+    .slice(0, 6);
+}
+
+function buildBatterImpact(states: BallState[]) {
+  const players = new Map<string, { actual: number; expected: number; balls: number; boundaries: number; dots: number }>();
+
+  for (const state of states) {
+    const batter = state.ball.batsman;
+    const current = players.get(batter) ?? { actual: 0, expected: 0, balls: 0, boundaries: 0, dots: 0 };
+    current.actual += state.ball.batsmanRuns ?? state.ball.score;
+    current.expected += state.expectedRuns * 0.86;
+    current.balls += state.ball.legalBall === false ? 0 : 1;
+    current.boundaries += state.ball.isBoundary ? 1 : 0;
+    current.dots += state.ball.score === 0 ? 1 : 0;
+    players.set(batter, current);
+  }
+
+  return [...players.entries()]
+    .map(([label, value]) => ({
+      label,
+      actual: round(value.actual, 1),
+      expected: round(value.expected, 1),
+      delta: round(value.actual - value.expected + value.boundaries * 0.5 - value.dots * 0.18, 1),
+      sample: value.balls,
+      note: `${value.actual} runs from ${value.balls} tracked balls with ${value.boundaries} boundaries and ${value.dots} dots.`,
+    } satisfies LiveImpactDatum))
+    .sort((left, right) => right.delta - left.delta)
+    .slice(0, 8);
+}
+
+function buildBowlerImpact(states: BallState[]) {
+  const bowlers = new Map<string, { actual: number; expected: number; balls: number; dots: number; wickets: number }>();
+
+  for (const state of states) {
+    const bowler = state.ball.bowler;
+    const current = bowlers.get(bowler) ?? { actual: 0, expected: 0, balls: 0, dots: 0, wickets: 0 };
+    current.actual += state.ball.score;
+    current.expected += state.expectedRuns;
+    current.balls += state.ball.legalBall === false ? 0 : 1;
+    current.dots += state.ball.score === 0 ? 1 : 0;
+    current.wickets += state.ball.isWicket ? 1 : 0;
+    bowlers.set(bowler, current);
+  }
+
+  const impacts = [...bowlers.entries()].map(([label, value]) => {
+    const runsSaved = value.expected - value.actual;
+
+    return {
+      label,
+      actual: round(value.actual, 1),
+      expected: round(value.expected, 1),
+      delta: round(runsSaved + value.wickets * 7 + value.dots * 0.25, 1),
+      sample: value.balls,
+      note: `${round(runsSaved, 1)} runs saved versus expected with ${value.wickets} wicket${value.wickets === 1 ? "" : "s"} in ${value.balls} tracked balls.`,
+    } satisfies LiveImpactDatum;
+  });
+
+  return impacts.sort((left, right) => right.delta - left.delta).slice(0, 8);
+}
+
+function buildBowlerRunsSaved(states: BallState[]) {
+  const bowlers = new Map<string, { actual: number; expected: number; balls: number }>();
+
+  for (const state of states) {
+    const bowler = state.ball.bowler;
+    const current = bowlers.get(bowler) ?? { actual: 0, expected: 0, balls: 0 };
+    current.actual += state.ball.score;
+    current.expected += state.expectedRuns;
+    current.balls += state.ball.legalBall === false ? 0 : 1;
+    bowlers.set(bowler, current);
+  }
+
+  return [...bowlers.entries()]
+    .map(([label, value]) => ({
+      label,
+      actual: round(value.actual, 1),
+      expected: round(value.expected, 1),
+      delta: round(value.expected - value.actual, 1),
+      sample: value.balls,
+      note: `${round(value.expected - value.actual, 1)} runs saved across ${value.balls} tracked balls.`,
+    } satisfies LiveImpactDatum))
+    .sort((left, right) => right.delta - left.delta)
+    .slice(0, 8);
+}
+
+function buildPartnershipInfluence(states: BallState[], currentInning: Scorecard | null) {
+  const battingOrder = currentInning?.batting.map((entry) => entry.batsman.name).filter(Boolean) ?? [];
+  if (battingOrder.length < 2) return [] satisfies LivePartnershipDatum[];
+
+  const partnerships: LivePartnershipDatum[] = [];
+  let nextBatterIndex = 2;
+  let activeBatters = battingOrder.slice(0, 2);
+  let current: LivePartnershipDatum | null = null;
+
+  function openPartnership(pair: string[]) {
+    const normalizedPair = [...new Set(pair.filter(Boolean))];
+    if (normalizedPair.length < 2) return null;
+
+    const partnership = {
+      label: `P${partnerships.length + 1}`,
+      pair: `${normalizedPair[0]} & ${normalizedPair[1]}`,
+      runs: 0,
+      balls: 0,
+      influence: 0,
+      note: "Live partnership state inferred from batting order and tracked balls.",
+    } satisfies LivePartnershipDatum;
+
+    partnerships.push(partnership);
+    return partnership;
+  }
+
+  current = openPartnership(activeBatters);
+
+  for (const state of states) {
+    if (!activeBatters.includes(state.ball.batsman)) {
+      const survivingBatter = activeBatters.find((name) => name !== state.ball.batsman) ?? activeBatters[0];
+      activeBatters = [survivingBatter, state.ball.batsman].filter(Boolean);
+      current = openPartnership(activeBatters);
+    }
+
+    if (!current) {
+      current = openPartnership(activeBatters);
+      if (!current) continue;
+    }
+
+    current.runs += state.ball.score;
+    current.balls += state.ball.legalBall === false ? 0 : 1;
+    current.influence += state.deltaWinProbability;
+    current.note = `${current.runs} runs from ${current.balls} tracked balls. Influence ${round(current.influence, 1)} win-probability points.`;
+
+    if (state.ball.isWicket) {
+      const dismissedBatter = state.ball.dismissedBatter || state.ball.batsman;
+      activeBatters = activeBatters.filter((name) => name !== dismissedBatter);
+      while (nextBatterIndex < battingOrder.length && activeBatters.includes(battingOrder[nextBatterIndex])) {
+        nextBatterIndex += 1;
+      }
+      const incomingBatter = battingOrder[nextBatterIndex];
+      if (incomingBatter) {
+        activeBatters = [...activeBatters, incomingBatter];
+        nextBatterIndex += 1;
+      }
+      current = null;
+    }
+  }
+
+  return partnerships
+    .filter((entry) => entry.balls > 0)
+    .map((entry) => ({
+      ...entry,
+      influence: round(entry.influence, 1),
+    }))
+    .sort((left, right) => Math.abs(right.influence) - Math.abs(left.influence))
+    .slice(0, 8);
+}
+
+function buildCounterfactuals(states: BallState[], snapshot: LivePressureSnapshot, match: Match, venue: HistoricalVenueSnapshot) {
+  if (states.length === 0) return [] satisfies LiveScenarioDatum[];
+
+  const lastState = states[states.length - 1];
+  const scheduledOvers = getScheduledOvers(match.matchType);
+  const lastTwelveBalls = states.slice(-12);
+  const recentRunRate =
+    lastTwelveBalls.filter((state) => state.ball.legalBall !== false).length > 0
+      ? (lastTwelveBalls.reduce((sum, state) => sum + state.ball.score, 0) /
+          Math.max(lastTwelveBalls.filter((state) => state.ball.legalBall !== false).length / 6, 0.1))
+      : lastState.currentRunRate;
+  const oversRemaining = scheduledOvers !== null ? Math.max(scheduledOvers - snapshot.overs, 0) : 0;
+  const venuePar = venue.avgFirstInningsScore ?? defaultParTotal(match.matchType);
+
+  const currentTrend = {
+    label: "Current trend",
+    projectedTotal: snapshot.projectedTotal,
+    winProbability: lastState.winProbability,
+    note: "Maintains the present scoring tempo and wicket profile.",
+  } satisfies LiveScenarioDatum;
+
+  const surge = {
+    label: "Attack surge",
+    projectedTotal: round(snapshot.runs + oversRemaining * Math.max(recentRunRate, lastState.currentRunRate) * 1.12, 0),
+    winProbability: clamp(round(lastState.winProbability + 9, 1), 1, 99),
+    note: "Assumes the next phase scores about 12% faster than the current trend.",
+  } satisfies LiveScenarioDatum;
+
+  const squeeze = {
+    label: "Bowling squeeze",
+    projectedTotal: round(Math.max(snapshot.runs, snapshot.projectedTotal - oversRemaining * 0.9), 0),
+    winProbability: clamp(round(lastState.winProbability - 12, 1), 1, 99),
+    note: "Assumes one extra wicket and a visible slowdown through the next phase.",
+  } satisfies LiveScenarioDatum;
+
+  const venueFinish = {
+    label: "Venue-par finish",
+    projectedTotal: round(venuePar, 0),
+    winProbability: clamp(
+      round(lastState.winProbability + (venuePar - snapshot.projectedTotal) * (snapshot.target ? -0.08 : 0.08), 1),
+      1,
+      99
+    ),
+    note: "Benchmarks the innings against the local warehouse venue expectation.",
+  } satisfies LiveScenarioDatum;
+
+  return [currentTrend, surge, squeeze, venueFinish];
+}
+
+function buildHeatmap(states: BallState[], match: Match) {
+  const scheduledOvers = getScheduledOvers(match.matchType);
+  const recentWindowSize = scheduledOvers !== null && scheduledOvers <= 20 ? scheduledOvers * 6 : 72;
+
+  return states
+    .slice(-recentWindowSize)
+    .map((state) => ({
+      over: state.ball.over,
+      ball: state.ball.ball,
+      runs: state.ball.score,
+      pressure: state.pressure,
+      label: state.label,
+      isDot: state.ball.score === 0,
+      isWicket: Boolean(state.ball.isWicket),
+    } satisfies LiveHeatmapCell));
+}
+
+function buildMatchupMatrix(states: BallState[]) {
+  const matchupMap = new Map<string, LiveMatchupCell>();
+  const batterWeight = new Map<string, number>();
+  const bowlerWeight = new Map<string, number>();
+
+  for (const state of states) {
+    const key = `${state.ball.batsman}::${state.ball.bowler}`;
+    const current = matchupMap.get(key) ?? {
+      batter: state.ball.batsman,
+      bowler: state.ball.bowler,
+      runs: 0,
+      balls: 0,
+      dismissals: 0,
+      dotPct: 0,
+      strikeRate: 0,
+      threat: 0,
+    };
+
+    current.runs += state.ball.batsmanRuns ?? state.ball.score;
+    current.balls += state.ball.legalBall === false ? 0 : 1;
+    current.dismissals += state.ball.isWicket ? 1 : 0;
+    current.dotPct += state.ball.score === 0 ? 1 : 0;
+    current.threat += (state.ball.score === 0 ? 1 : 0) + (state.ball.isWicket ? 8 : 0) - (state.ball.isBoundary ? 2 : 0);
+    matchupMap.set(key, current);
+
+    batterWeight.set(state.ball.batsman, (batterWeight.get(state.ball.batsman) ?? 0) + (state.ball.legalBall === false ? 0 : 1));
+    bowlerWeight.set(state.ball.bowler, (bowlerWeight.get(state.ball.bowler) ?? 0) + (state.ball.legalBall === false ? 0 : 1));
+  }
+
+  const topBatters = [...batterWeight.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 6)
+    .map(([name]) => name);
+  const topBowlers = [...bowlerWeight.entries()]
+    .sort((left, right) => right[1] - left[1])
+    .slice(0, 6)
+    .map(([name]) => name);
+
+  return [...matchupMap.values()]
+    .filter((cell) => topBatters.includes(cell.batter) && topBowlers.includes(cell.bowler))
+    .map((cell) => ({
+      ...cell,
+      dotPct: cell.balls > 0 ? round((cell.dotPct / cell.balls) * 100, 1) : 0,
+      strikeRate: cell.balls > 0 ? round((cell.runs * 100) / cell.balls, 1) : 0,
+      threat: round(cell.threat, 1),
+    }))
+    .sort((left, right) => right.threat - left.threat);
+}
+
+function buildTimelineSeries(states: BallState[]) {
+  const winProbability = states.map((state) =>
+    toTimelinePoint(
+      `wp-${state.ball.id}`,
+      state.label,
+      state.winProbability,
+      state.ball.commentary,
+      {
+        over: state.ball.over,
+        ball: state.ball.ball,
+        isWicket: state.ball.isWicket,
+      }
+    )
+  );
+
+  const control = states.map((state) =>
+    toTimelinePoint(
+      `control-${state.ball.id}`,
+      state.label,
+      state.control,
+      `Control swing ${state.control} after ${state.ball.commentary}`,
+      {
+        over: state.ball.over,
+        ball: state.ball.ball,
+        isWicket: state.ball.isWicket,
+      }
+    )
+  );
+
+  const pressure = states.map((state) =>
+    toTimelinePoint(
+      `pressure-${state.ball.id}`,
+      state.label,
+      state.pressure,
+      `Pressure index ${state.pressure} at ${state.label}.`,
+      {
+        over: state.ball.over,
+        ball: state.ball.ball,
+        isWicket: state.ball.isWicket,
+      }
+    )
+  );
+
+  return { winProbability, control, pressure };
+}
+
+function pickCurrentInning(scorecards: Scorecard[] | null, snapshot: LivePressureSnapshot) {
+  if (!scorecards || scorecards.length === 0) return null;
+
+  return (
+    scorecards.find((scorecard) => scorecard.inning.toLowerCase().includes(snapshot.battingTeam.toLowerCase())) ??
+    scorecards[scorecards.length - 1]
+  );
+}
+
+export function buildLiveAnalyticsBundle(input: {
+  match: Match;
+  commentaryBalls: BallByBall[];
+  scorecards: Scorecard[] | null;
+  snapshot: LivePressureSnapshot;
+  venue: HistoricalVenueSnapshot;
+}): LiveAnalyticsBundle {
+  if (input.commentaryBalls.length === 0) {
+    return {
+      ballWinProbability: [],
+      matchControlSwing: [],
+      pressureTimeline: [],
+      topTurningBalls: [],
+      topTurningOvers: [],
+      batterImpact: [],
+      bowlerImpact: [],
+      bowlerRunsSaved: [],
+      partnershipInfluence: [],
+      counterfactuals: [],
+      requiredVsActualRate: [],
+      dotBallHeatmap: [],
+      matchupMatrix: [],
+    };
+  }
+
+  const states = buildBallStates(input.match, input.commentaryBalls, input.snapshot, input.venue);
+  const timelines = buildTimelineSeries(states);
+  const currentInning = pickCurrentInning(input.scorecards, input.snapshot);
+
+  return {
+    ballWinProbability: timelines.winProbability,
+    matchControlSwing: timelines.control,
+    pressureTimeline: timelines.pressure,
+    topTurningBalls: buildTurningBallBars(states),
+    topTurningOvers: buildTurningOverBars(states),
+    batterImpact: buildBatterImpact(states),
+    bowlerImpact: buildBowlerImpact(states),
+    bowlerRunsSaved: buildBowlerRunsSaved(states),
+    partnershipInfluence: buildPartnershipInfluence(states, currentInning),
+    counterfactuals: buildCounterfactuals(states, input.snapshot, input.match, input.venue),
+    requiredVsActualRate: buildRateTimeline(states, input.match, input.venue),
+    dotBallHeatmap: buildHeatmap(states, input.match),
+    matchupMatrix: buildMatchupMatrix(states),
+  };
+}

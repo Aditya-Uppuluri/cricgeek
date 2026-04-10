@@ -596,7 +596,6 @@ export default function MatchDetailClient({
             <LiveEdaPanel
               matchId={liveMatch.id}
               enabled={isLive}
-              refreshToken={lastUpdated}
             />
           )}
           {activeTab === "live" && (

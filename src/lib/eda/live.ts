@@ -1,3 +1,4 @@
+import { getMatchCommentary, getMatchScorecard } from "@/lib/cricket-api";
 import { forwardInsightsService } from "@/lib/ai-service";
 import {
   inferPhase,
@@ -8,10 +9,13 @@ import {
   round,
   getScheduledOvers,
 } from "@/lib/eda/common";
+import { buildLiveAnalyticsBundle } from "@/lib/eda/live-analytics";
 import { getVenueSnapshot } from "@/lib/eda/historical";
-import type { Match, Score } from "@/types/cricket";
+import type { Commentary, Match, Score, Scorecard } from "@/types/cricket";
 import type { InsightsAdvisorResponse } from "@/types/insights";
 import type { LiveEdaReport, LivePressureSnapshot } from "@/types/eda";
+
+export const LIVE_EDA_POLL_INTERVAL_SECONDS = 15;
 
 function isT20Match(match: Match) {
   return /t20/i.test(match.matchType);
@@ -96,11 +100,13 @@ export function deriveLivePressureSnapshot(match: Match): LivePressureSnapshot {
     bowlingTeam,
     runs: currentScore.r,
     wickets: currentScore.w,
+    wicketsInHand: Math.max(0, 10 - currentScore.w),
     overs: currentScore.o,
     target,
     currentRunRate,
     requiredRunRate,
     projectedTotal,
+    ballsRemaining: scheduledOvers !== null ? Math.max(scheduledOvers * 6 - Math.round(currentScore.o * 6), 0) : null,
     pressureIndex: round(pressureIndex, 1),
     momentumIndex: round(momentumIndex, 1),
     phase: inferPhase(currentScore.o, match.matchType),
@@ -140,13 +146,32 @@ async function getAdvisor(match: Match, snapshot: LivePressureSnapshot): Promise
   }
 }
 
-export async function buildLiveEdaReport(match: Match): Promise<LiveEdaReport> {
+type BuildLiveEdaReportOptions = {
+  commentary?: Commentary | null;
+  scorecards?: Scorecard[] | null;
+  fresh?: boolean;
+};
+
+export async function buildLiveEdaReport(
+  match: Match,
+  options: BuildLiveEdaReportOptions = {}
+): Promise<LiveEdaReport> {
   const snapshot = deriveLivePressureSnapshot(match);
   const scheduledOvers = getScheduledOvers(match.matchType);
-  const [venue, advisor] = await Promise.all([
+  const [venue, advisor, commentary, scorecards] = await Promise.all([
     getVenueSnapshot(match.venue, match.matchType),
     getAdvisor(match, snapshot),
+    options.commentary !== undefined ? Promise.resolve(options.commentary) : getMatchCommentary(match.id, { fresh: options.fresh ?? true }),
+    options.scorecards !== undefined ? Promise.resolve(options.scorecards) : getMatchScorecard(match.id, { fresh: options.fresh ?? true }),
   ]);
+  const analytics = buildLiveAnalyticsBundle({
+    match,
+    commentaryBalls: commentary?.bbb ?? [],
+    scorecards,
+    snapshot,
+    venue,
+  });
+  const topTurningBall = analytics.topTurningBalls[0];
 
   const cards = [
     {
@@ -225,9 +250,18 @@ export async function buildLiveEdaReport(match: Match): Promise<LiveEdaReport> {
   if (scheduledOvers === null) {
     warnings.push("This format does not use a fixed-over pace model, so projections and phase labels are more conservative.");
   }
+  if ((commentary?.bbb.length ?? 0) === 0) {
+    warnings.push("Ball-by-ball feed is unavailable right now, so advanced live charts are waiting on the SportMonks balls stream.");
+  }
+  if (!scorecards || scorecards.length === 0) {
+    warnings.push("Live scorecards are limited, so batter, bowler, and partnership impact views may be lighter than usual.");
+  }
 
   const reasons = [
     "SportMonks live state is available for the active innings.",
+    (commentary?.bbb.length ?? 0) > 0
+      ? "Ball-by-ball events were available for the live analytics layer."
+      : "Ball-by-ball events were unavailable for the live analytics layer.",
     advisor ? "The specialist T20 advisor responded with player recommendations." : "The specialist T20 advisor was unavailable or not applicable.",
     venue.available ? "Historical venue context was available." : "Historical venue context was limited.",
   ];
@@ -238,24 +272,28 @@ export async function buildLiveEdaReport(match: Match): Promise<LiveEdaReport> {
     cards,
     summary:
       snapshot.innings === 2 && snapshot.requiredRunRate !== null
-        ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs, needing ${snapshot.requiredRunRate} per over. The current pressure index is ${snapshot.pressureIndex}.`
+        ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs, needing ${snapshot.requiredRunRate} per over. The current pressure index is ${snapshot.pressureIndex}${topTurningBall ? `, and the biggest recent swing came at ${topTurningBall.label}.` : "."}`
         : scheduledOvers !== null
-          ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs with a projected total of ${snapshot.projectedTotal}. The current pressure index is ${snapshot.pressureIndex}.`
+          ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs with a projected total of ${snapshot.projectedTotal}. The current pressure index is ${snapshot.pressureIndex}${topTurningBall ? `, and the sharpest state change came at ${topTurningBall.label}.` : "."}`
           : `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs. Fixed-over projections are not applied in this format, so the live read leans on wickets, tempo, and venue context.`,
     advisor,
+    pollIntervalSeconds: LIVE_EDA_POLL_INTERVAL_SECONDS,
+    ballsTracked: commentary?.bbb.length ?? 0,
+    analytics,
     confidence: buildConfidence(
       45 +
         (advisor ? 20 : 0) +
         (venue.available ? 10 : 0) +
         (match.matchStarted ? 10 : 0) +
-        (scheduledOvers !== null ? 10 : 0),
+        (scheduledOvers !== null ? 10 : 0) +
+        ((commentary?.bbb.length ?? 0) > 0 ? 10 : 0),
       reasons
     ),
     freshness: buildFreshness({
       match,
       historicalAvailable: venue.available,
       notes: [
-        "Live EDA refreshes from the current SportMonks score state and blends in venue benchmarks when available.",
+        `Live EDA refreshes every ${LIVE_EDA_POLL_INTERVAL_SECONDS} seconds from the SportMonks score state and commentary feed, then blends in venue benchmarks when available.`,
       ],
     }),
     warnings,
@@ -267,6 +305,16 @@ export async function buildLiveEdaReport(match: Match): Promise<LiveEdaReport> {
         note: "Live scoreboard state came from the SportMonks-backed match route.",
         updatedAt: new Date().toISOString(),
       },
+      ...(commentary?.bbb.length
+        ? [
+            {
+              id: "live-balls",
+              type: "sportmonks" as const,
+              title: "Ball-by-ball live feed",
+              note: `${commentary.bbb.length} tracked balls were used for live timelines, turning points, heatmaps, and matchup analysis.`,
+            },
+          ]
+        : []),
       {
         id: "live-venue",
         type: "historical_warehouse" as const,
