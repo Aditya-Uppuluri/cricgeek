@@ -51,28 +51,28 @@ function BlogPageContent() {
   const matchId = searchParams.get("matchId") || "";
 
   useEffect(() => {
-    fetchBlogs();
-  }, [matchId, feed]);
-
-  const fetchBlogs = async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      if (matchId) params.set("matchId", matchId);
-      params.set("feed", feed);
-      const res = await fetch(`/api/blogs${params.toString() ? `?${params.toString()}` : ""}`);
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
+    const fetchBlogs = async () => {
+      setLoading(true);
+      try {
+        const params = new URLSearchParams();
+        if (matchId) params.set("matchId", matchId);
+        params.set("feed", feed);
+        const res = await fetch(`/api/blogs${params.toString() ? `?${params.toString()}` : ""}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          setBlogs([]);
+          return;
+        }
+        setBlogs(data.blogs || []);
+      } catch {
         setBlogs([]);
-        return;
+      } finally {
+        setLoading(false);
       }
-      setBlogs(data.blogs || []);
-    } catch {
-      setBlogs([]);
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+
+    void fetchBlogs();
+  }, [matchId, feed]);
 
   const filteredBlogs = blogs.filter(
     (blog) =>
@@ -295,8 +295,9 @@ function BlogPageContent() {
           <div className="bg-cg-dark-2 border border-gray-800 rounded-xl p-4">
             <h3 className="text-sm font-bold text-white mb-2">What is BQS?</h3>
             <p className="text-gray-400 text-xs leading-relaxed">
-              Blog Quality Score (BQS) is our Qwen-powered cricket writing engine. Each blog is checked for originality,
-              coherence, constructiveness, stat quality, negativity-versus-toxicity, and paragraph-level clarity before a final 0-100 score is assembled.
+              Blog Quality Score (BQS) is our cricket writing engine. Each blog is checked for originality, coherence,
+              constructiveness, evidence strength, fact accuracy, argument logic, depth, balance, and negativity-versus-toxicity
+              before a final 0-100 score is assembled.
             </p>
             <Link href="/leaderboard" className="text-cg-green text-xs font-medium mt-2 inline-block hover:underline">
               View Leaderboard →

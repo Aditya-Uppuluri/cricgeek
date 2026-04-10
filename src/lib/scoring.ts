@@ -771,28 +771,195 @@ ${input.content}`;
 
 // ── Heuristic Fallback (when AI service is offline) ──────────────────
 
-function heuristicScore(text: string, pp: PreProcessResult): OllamaScoreResponse {
-  const words = text.toLowerCase().split(/\s+/);
+function heuristicScore(
+  text: string,
+  pp: PreProcessResult,
+  directStats: DirectStatVerification
+): OllamaScoreResponse {
+  const lower = text.toLowerCase();
+  const words = lower
+    .split(/\s+/)
+    .map((word) => word.replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, ""))
+    .filter(Boolean);
   const wc = words.length;
+  const sentences = text.split(/[.!?]+/).map((sentence) => sentence.trim()).filter(Boolean);
   const paragraphs = text
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.trim())
     .filter(Boolean);
 
-  const positiveTerms = ["excellent", "brilliant", "impressive", "dominant", "outstanding"];
-  const negativeTerms = ["terrible", "worst", "awful", "disaster", "poor", "sloppy", "frustrating", "disappointing"];
-  const toxicPatterns = ["idiot", "stupid", "trash", "garbage", "loser", "hate"];
+  const supportiveHits = countRegexHits(lower, [
+    /\bbeast\b/,
+    /\bexcellent\b/,
+    /\bbrilliant\b/,
+    /\bimpressive\b/,
+    /\bdominant\b/,
+    /\boutstanding\b/,
+    /\bconsisten(cy|t)\b/,
+    /\bconfidence\b/,
+    /\breliable\b/,
+    /\bmatch[- ]winning\b/,
+    /\bgame[- ]changer(s)?\b/,
+    /\bform\b/,
+    /\bimpact\b/,
+  ]);
+  const criticalHits = countRegexHits(lower, [
+    /\bterrible\b/,
+    /\bworst\b/,
+    /\bawful\b/,
+    /\bdisaster\b/,
+    /\bpoor\b/,
+    /\bsloppy\b/,
+    /\bfrustrating\b/,
+    /\bdisappointing\b/,
+    /\bstruggle(s|d|ing)?\b/,
+    /\bconcern(ing)?\b/,
+    /\bunderperform(ing|ed)?\b/,
+  ]);
+  const toxicHits = countRegexHits(lower, [
+    /\bidiot\b/,
+    /\bstupid\b/,
+    /\btrash\b/,
+    /\bgarbage\b/,
+    /\bloser\b/,
+    /\bhate\b/,
+    /\bpathetic\b/,
+    /\blaughable\b/,
+    /\bjoke\b/,
+    /\bwashed\b/,
+  ]);
+  const clicheHits = countRegexHits(lower, [
+    /\babsolute beast\b/,
+    /\bmatch[- ]winning\b/,
+    /\bgame[- ]changer(s)?\b/,
+    /\bnext level\b/,
+    /\bworld[- ]class\b/,
+    /\btop[- ]class\b/,
+  ]);
+  const analysisHits = countRegexHits(lower, [
+    /\baverage\b/,
+    /\bstrike rate\b/,
+    /\beconomy\b/,
+    /\bconsisten(cy|t)\b/,
+    /\bconfidence\b/,
+    /\bform\b/,
+    /\bimpact\b/,
+    /\brole\b/,
+    /\bpressure\b/,
+    /\bphase\b/,
+    /\bintent\b/,
+    /\breliable\b/,
+  ]);
+  const reasoningHits = countRegexHits(lower, [
+    /\bbecause\b/,
+    /\bsince\b/,
+    /\btherefore\b/,
+    /\bif\b/,
+    /\bshow(s|ing)?\b/,
+    /\bsuggest(s|ed)?\b/,
+    /\bindicat(es|ed)?\b/,
+    /\bmeans\b/,
+    /\breflect(s|ed)?\b/,
+    /\bkeep(s|ing)?\b/,
+  ]);
+  const counterHits = countRegexHits(lower, [
+    /\bhowever\b/,
+    /\bbut\b/,
+    /\balthough\b/,
+    /\bthough\b/,
+    /\byet\b/,
+    /\bstill\b/,
+    /\bif\b/,
+    /\bcould\b/,
+    /\bmay\b/,
+    /\bmight\b/,
+    /\bunless\b/,
+  ]);
+  const statTermHits = countRegexHits(lower, [
+    /\baverage\b/,
+    /\bstrike rate\b/,
+    /\beconomy\b/,
+    /\bruns\b/,
+    /\bwickets\b/,
+    /\bovers\b/,
+    /\bballs\b/,
+    /\bgames?\b/,
+    /\binnings\b/,
+    /\bseason\b/,
+    /\bmatch(es)?\b/,
+  ]);
+  const timeContextHits = countRegexHits(lower, [
+    /\blast\b/,
+    /\blately\b/,
+    /\brecent(ly)?\b/,
+    /\bthis season\b/,
+    /\bso far\b/,
+    /\bacross\b/,
+  ]);
+  const numericMatches = text.match(/\b\d+(\.\d+)?\b/g) ?? [];
+  const entityStopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "but",
+    "he",
+    "her",
+    "his",
+    "if",
+    "in",
+    "it",
+    "she",
+    "the",
+    "they",
+    "this",
+    "that",
+    "these",
+    "those",
+    "we",
+    "with",
+  ]);
+  const properNounMatches = text.match(/\b(?:[A-Z]{2,}|[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b/g) ?? [];
+  const entitySignals = new Set(
+    properNounMatches
+      .map((entry) => entry.trim())
+      .filter((entry) => !entityStopWords.has(entry.toLowerCase()))
+  );
 
-  const posHits = words.filter((w) => positiveTerms.includes(w)).length;
-  const negHits = words.filter((w) => negativeTerms.includes(w)).length;
-  const toneScore = Math.min(100, Math.round(((posHits + 1) / (posHits + negHits + 2)) * 80 + 10));
-  const negativityScore = Math.min(100, Math.round((negHits / Math.max(wc, 1)) * 600 + 18));
-  const toxicHits = words.filter((w) => toxicPatterns.some((p) => w.includes(p))).length;
-  const toxicityScore = Math.min(100, Math.round((toxicHits / Math.max(wc, 1)) * 400 + 2));
+  const toneScore = clampScore(48 + supportiveHits * 6 - criticalHits * 5 - toxicHits * 15 - clicheHits * 2, 55);
+  const negativityScore = clampScore(6 + criticalHits * 11 + toxicHits * 4 - supportiveHits * 2, 8);
+  const toxicityScore = clampScore(2 + toxicHits * 22, 2);
 
-  const uniqueW = new Set(words);
-  const originalityScore = Math.min(100, Math.round((uniqueW.size / Math.max(wc, 1)) * 120));
-  const coherenceScore = Math.min(100, 65 + Math.round(Math.min(wc / 30, 25)));
+  const sentenceFlowRatio =
+    sentences.length > 0
+      ? sentences.filter((sentence) => {
+          const length = sentence.split(/\s+/).filter(Boolean).length;
+          return length >= 6 && length <= 28;
+        }).length / sentences.length
+      : 0.5;
+  const shortFormPenalty = Math.max(0, 70 - wc) * 0.2;
+  const directEvidenceBoost =
+    directStats.source === "live"
+      ? directStats.statsVerified * 16 + directStats.statsFound * 4
+      : directStats.statsVerified * 12 + directStats.statsFound * 4;
+
+  const originalityScore = clampScore(
+    25 +
+      pp.lexicalDiversity * 45 +
+      Math.min(10, pp.sentenceVariety * 0.45) +
+      Math.min(8, sentences.length * 2) -
+      shortFormPenalty -
+      clicheHits * 7,
+    45
+  );
+  const coherenceScore = clampScore(
+    42 +
+      sentenceFlowRatio * 24 +
+      Math.min(14, reasoningHits * 3) +
+      Math.min(10, counterHits * 2) +
+      (paragraphs.length > 1 ? 6 : 2) -
+      Math.min(10, clicheHits * 2),
+    58
+  );
 
   const archetypeKeywords: Record<Archetype, string[]> = {
     analyst: ["average", "stats", "data", "numbers", "records", "rate", "percentage", "economy"],
@@ -807,17 +974,124 @@ function heuristicScore(text: string, pp: PreProcessResult): OllamaScoreResponse
   archetypeScores.sort((a, b) => b.count - a.count);
   const bestArchetype = archetypeScores[0].count > 0 ? archetypeScores[0].label : "fan";
 
-  const reasoningWords = ["because", "therefore", "however", "since", "suggests", "evidence"];
-  const reasoningHits = words.filter((w) => reasoningWords.includes(w)).length;
-  const constructiveness = Math.min(100, reasoningHits * 10 + 35);
-  const argumentLogic = Math.min(100, reasoningHits * 12 + 30);
-  const infoDensity = Math.min(100, Math.round((wc / Math.max(pp.sentenceCount, 1)) * 4));
-  const evidencePresence = Math.min(100, 20 + Math.random() * 30);
+  const constructiveness = clampScore(
+    26 +
+      analysisHits * 3 +
+      reasoningHits * 5 +
+      Math.min(10, counterHits * 3) +
+      Math.min(12, directStats.statsFound * 8) -
+      toxicHits * 18 -
+      clicheHits * 2,
+    40
+  );
+  const argumentLogic = clampScore(
+    24 +
+      reasoningHits * 6 +
+      analysisHits * 3 +
+      Math.min(10, directStats.statsVerified * 8) +
+      Math.min(10, sentences.length * 2) -
+      clicheHits * 2,
+    35
+  );
+  const infoDensity = clampScore(
+    18 +
+      statTermHits * 4 +
+      timeContextHits * 3 +
+      numericMatches.length * 5 +
+      Math.min(15, entitySignals.size * 3) +
+      Math.min(10, wc / 12),
+    32
+  );
+  const evidencePresence = clampScore(
+    16 +
+      Math.min(28, directEvidenceBoost) +
+      statTermHits * 5 +
+      timeContextHits * 4 +
+      numericMatches.length * 6 +
+      Math.min(12, entitySignals.size * 4) -
+      clicheHits * 2,
+    35
+  );
+  const counterAcknowledge = clampScore(10 + counterHits * 10, 18);
+  const positionClarity = clampScore(
+    38 +
+      Math.min(15, sentences.length * 4) +
+      Math.min(12, counterHits * 4) +
+      (entitySignals.size > 0 ? 8 : 0) +
+      (numericMatches.length > 0 ? 6 : 0) -
+      Math.min(8, clicheHits * 2),
+    50
+  );
+  const completeness = clampScore(
+    pp.completeness +
+      Math.min(15, statTermHits * 3) +
+      Math.min(12, counterHits * 3) +
+      (sentences.length >= 3 ? 10 : 0),
+    pp.completeness
+  );
+
+  const stopWords = new Set([
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "been",
+    "for",
+    "from",
+    "has",
+    "have",
+    "he",
+    "his",
+    "if",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "so",
+    "the",
+    "this",
+    "to",
+    "was",
+    "with",
+  ]);
+  const significantWords = words.filter((word) => word.length >= 4 && !stopWords.has(word));
+  const wordCounts = new Map<string, number>();
+  for (const word of significantWords) {
+    wordCounts.set(word, (wordCounts.get(word) ?? 0) + 1);
+  }
+  const bigramCounts = new Map<string, number>();
+  for (let index = 0; index < significantWords.length - 1; index += 1) {
+    const bigram = `${significantWords[index]} ${significantWords[index + 1]}`;
+    bigramCounts.set(bigram, (bigramCounts.get(bigram) ?? 0) + 1);
+  }
+  const repeatedWordExcess = [...wordCounts.values()].reduce((sum, count) => sum + Math.max(0, count - 2), 0);
+  const repeatedBigramExcess = [...bigramCounts.values()].reduce((sum, count) => sum + Math.max(0, count - 1), 0);
+  const repetitionPenalty = clampScore(
+    repeatedWordExcess * 9 + repeatedBigramExcess * 12 + (wc < 25 ? 6 : 0),
+    0
+  );
+
+  const writerDna = normaliseWriterDNASignal(
+    {
+      analyst: (archetypeScores.find((entry) => entry.label === "analyst")?.count ?? 0) + statTermHits + directStats.statsFound * 2,
+      fan: (archetypeScores.find((entry) => entry.label === "fan")?.count ?? 0) + supportiveHits,
+      storyteller: (archetypeScores.find((entry) => entry.label === "storyteller")?.count ?? 0) + (paragraphs.length > 1 ? 2 : 0),
+      debater: (archetypeScores.find((entry) => entry.label === "debater")?.count ?? 0) + counterHits + reasoningHits,
+    },
+    bestArchetype
+  );
+
+  const paragraphOverall = Math.round((constructiveness + coherenceScore + evidencePresence + originalityScore) / 4);
+  const supportiveRead = toneScore >= 70 && negativityScore <= 20 && toxicityScore <= 10;
 
   return {
     archetype: bestArchetype,
     archetype_confidence: 0.5,
-    final_bqs: 0,
     tone_score: toneScore,
     negativity_score: negativityScore,
     toxicity_score: toxicityScore,
@@ -825,62 +1099,68 @@ function heuristicScore(text: string, pp: PreProcessResult): OllamaScoreResponse
     coherence_score: coherenceScore,
     constructiveness,
     evidence_presence: evidencePresence,
-    counter_acknowledge: 30,
-    position_clarity: 50,
+    counter_acknowledge: counterAcknowledge,
+    position_clarity: positionClarity,
     info_density: infoDensity,
-    repetition_penalty: 80,
-    completeness: pp.completeness,
+    repetition_penalty: repetitionPenalty,
+    completeness,
     argument_logic: argumentLogic,
-    stat_accuracy: 75,
-    entities_found: 0,
-    stats_found: 0,
-    stats_verified: 0,
+    stat_accuracy: directStats.statAccuracy,
+    entities_found: entitySignals.size,
+    stats_found: directStats.statsFound,
+    stats_verified: directStats.statsVerified,
     word_count: pp.wordCount,
     lexical_diversity: pp.lexicalDiversity,
     sentence_variety: pp.sentenceVariety,
     toxicity_penalty_applied: toxicityScore > 28,
     toxicity_penalty_override: false,
-    writer_dna: {
-      analyst: bestArchetype === "analyst" ? 100 : 0,
-      fan: bestArchetype === "fan" ? 100 : 0,
-      storyteller: bestArchetype === "storyteller" ? 100 : 0,
-      debater: bestArchetype === "debater" ? 100 : 0,
-    },
+    writer_dna: writerDna,
     paragraph_scores: paragraphs.map((paragraph, index) => ({
       paragraph_index: index,
       excerpt: excerptForParagraph(paragraph),
-      overall: Math.round((constructiveness + coherenceScore + originalityScore) / 3),
+      overall: paragraphOverall,
       constructiveness,
       negativity: negativityScore,
       toxicity: toxicityScore,
       evidence: evidencePresence,
       coherence: coherenceScore,
-      note: toxicityScore > 45 ? "Tone is getting personal." : "Mostly cricket-focused analysis.",
+      note:
+        toxicityScore > 45
+          ? "Tone is getting personal rather than staying on cricket analysis."
+          : evidencePresence >= 60
+            ? "Paragraph makes a cricket claim with at least one concrete support signal."
+            : "Paragraph is readable but needs more specific support to score higher.",
     })),
     explanation: {
-      summary: "Fallback heuristic analysis used because Ollama was unavailable.",
+      summary: supportiveRead
+        ? "Fallback heuristic analysis found a supportive cricket take with some measurable recent-form evidence."
+        : "Fallback heuristic analysis was used because Ollama was unavailable.",
       strengths: [
-        originalityScore > 65 ? "Varied vocabulary adds freshness." : "Readable cricket writing structure.",
-        constructiveness > 60 ? "Reasoning language improves constructiveness." : "Opinion is clear enough to follow.",
-        coherenceScore > 70 ? "Overall flow remains coherent." : "Paragraph flow is serviceable.",
+        evidencePresence >= 60 ? "Specific stats or time-window references give the opinion some grounding." : "The core opinion is easy to follow.",
+        coherenceScore >= 70 ? "Sentence flow stays coherent and easy to scan." : "The writing remains readable.",
+        originalityScore >= 65 ? "Some phrasing feels distinct rather than copied boilerplate." : "The cricket framing stays direct and understandable.",
       ],
       concerns: [
-        toxicityScore > 40 ? "Hostile wording is dragging the score down." : "Evidence could be more specific.",
-        negativityScore > 55 ? "The piece leans negative in tone." : "There is room for stronger counter-points.",
-        "Fallback mode has lower confidence than the Ollama path.",
+        wc < 80 ? "The piece is short, so depth and completeness are capped." : "It could still add one more concrete proof point or comparison.",
+        counterAcknowledge < 35 ? "It makes a case, but does not really test itself against counter-arguments." : "The counter-position is present, but it is still fairly light-touch.",
+        clicheHits > 0 ? "Some hype phrasing weakens originality and analytical precision." : "More concrete phrasing would make the evidence read sharper.",
       ],
       negativity_vs_toxicity:
-        negativityScore > toxicityScore
+        supportiveRead
+          ? "The passage reads as supportive rather than critical or abusive."
+          : negativityScore > toxicityScore
           ? "The article is more critical than abusive."
           : "Negative tone and toxicity are close together here.",
       penalty_decision:
         toxicityScore > 55
           ? "A full toxicity penalty was applied."
-          : "Only a light toxicity penalty was applied.",
+          : toxicityScore > 28
+            ? "Only a light toxicity penalty was applied."
+            : "No toxicity penalty was needed because the language stays focused on cricket rather than abuse.",
       user_visible_breakdown: [
         `Constructiveness ${constructiveness}/100`,
-        `Negativity ${negativityScore}/100`,
-        `Toxicity ${toxicityScore}/100`,
+        `Evidence ${evidencePresence}/100`,
+        `Stat accuracy ${directStats.statAccuracy}/100`,
       ],
     },
   };
@@ -1353,6 +1633,8 @@ function computeBQS(
   const moderation = resolveModerationPenalty(model, ruleEngine);
   const toxicityInv = 100 - moderation.effectiveToxicity;
   const negativityAdjustment = model.negativityScore > 70 && model.toxicityScore < 20 ? 4 : 0;
+  const brevityPenalty = ruleEngine.completeness < 35 ? (35 - ruleEngine.completeness) * 0.4 : 0;
+  const thinCounterPenalty = ruleEngine.counterAcknowledge < 20 ? (20 - ruleEngine.counterAcknowledge) * 0.2 : 0;
 
   let score =
     ruleEngine.constructiveness * weights.constructiveness +
@@ -1363,10 +1645,18 @@ function computeBQS(
     model.coherenceScore * weights.coherenceScore +
     ruleEngine.argumentLogic * weights.argumentLogic;
 
-  score += ruleEngine.evidencePresence * 0.05;
-  score += ruleEngine.positionClarity * 0.05;
+  score += ruleEngine.evidencePresence * 0.04;
+  score += ruleEngine.positionClarity * 0.03;
+  score += ruleEngine.completeness * 0.04;
+  score += ruleEngine.counterAcknowledge * 0.03;
   score -= ruleEngine.repetitionPenalty * 0.04;
+  score -= brevityPenalty;
+  score -= thinCounterPenalty;
   score += negativityAdjustment;
+
+  if (ruleEngine.evidencePresence > 80 && ruleEngine.completeness < 40) {
+    score -= 3;
+  }
 
   if (!moderation.overrideApplied && model.toxicityScore >= 70) {
     score -= 12;
@@ -1398,7 +1688,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     title: payload.title,
     content: text,
   });
-  const fallback = heuristicScore(text, pp);
+  const fallback = heuristicScore(text, pp, statMetrics);
 
   // Steps 2–7: Try Ollama, fall back to heuristics
   const aiResult = await callOllamaScorer(payload);
@@ -1427,10 +1717,23 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     positionClarity: clampScore(r.position_clarity, fallback.position_clarity),
     infoDensity: clampScore(r.info_density, fallback.info_density),
     repetitionPenalty: clampScore(r.repetition_penalty, fallback.repetition_penalty),
-    completeness: clampScore(Math.max(r.completeness || 0, pp.completeness), Math.max(fallback.completeness, pp.completeness)),
     argumentLogic: clampScore(r.argument_logic, fallback.argument_logic),
   };
-  const guarded = applyModerationGuardrails(text, modelScores, ruleEngineBase);
+  const structuralCompletenessCap = clampScore(
+    pp.completeness +
+      Math.min(20, pp.sentenceCount * 5) +
+      Math.min(16, pp.paragraphCount * 8) +
+      Math.min(16, pp.wordCount / 10),
+    pp.completeness
+  );
+  const ruleEngineBaseWithCompleteness = {
+    ...ruleEngineBase,
+    completeness: clampScore(
+      Math.min(clampScore(r.completeness, fallback.completeness), structuralCompletenessCap),
+      Math.min(fallback.completeness, structuralCompletenessCap)
+    ),
+  };
+  const guarded = applyModerationGuardrails(text, modelScores, ruleEngineBaseWithCompleteness);
 
   const overallFactAccuracy = computeOverallFactAccuracy(
     statMetrics,
@@ -1453,9 +1756,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
         ? r.toxicity_penalty_override
         : computed.moderation.overrideApplied,
   };
-  const bqs = guarded.sarcasmDetected
-    ? computed.bqs
-    : clampScore(r.final_bqs, computed.bqs);
+  const bqs = computed.bqs;
   const writerDNASignal = normaliseWriterDNASignal(r.writer_dna, guarded.model.archetypeLabel);
 
   const paragraphScores = normaliseParagraphScores(r.paragraph_scores, paragraphs, fallback);
@@ -1512,7 +1813,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     statAccuracy: finalStatAccuracy,
     factCheck,
     processingTimeMs: Date.now() - started,
-    scoreVersion: aiResult ? "qwen3.5-v5-routed-factcheck" : "heuristic-fallback-v1",
+    scoreVersion: aiResult ? "qwen3.5-v6-deterministic-bqs" : "heuristic-fallback-v2",
   };
 }
 
