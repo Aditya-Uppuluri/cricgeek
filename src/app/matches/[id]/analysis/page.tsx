@@ -2,13 +2,14 @@ import Link from "next/link";
 import type { Metadata } from "next";
 import { ArrowLeft, PenSquare, Radio } from "lucide-react";
 import EdaCards from "@/components/matches/EdaCards";
+import EdaAskPanel from "@/components/matches/EdaAskPanel";
 import BattingLeadersTable from "@/components/matches/BattingLeadersTable";
 import BowlingLeadersTable from "@/components/matches/BowlingLeadersTable";
 import InningsSummaryGrid from "@/components/matches/InningsSummaryGrid";
 import PostMatchSignals from "@/components/matches/PostMatchSignals";
 import { getMatchInfo, getMatchScorecard } from "@/lib/cricket-api";
+import { buildPostMatchEdaReport } from "@/lib/eda/post-match";
 import { getMatchCoverage } from "@/lib/match-coverage";
-import { buildPostMatchIntel } from "@/lib/match-intelligence";
 
 type PageProps = {
   params: Promise<{ id: string }>;
@@ -43,7 +44,8 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
     );
   }
 
-  const intel = await buildPostMatchIntel(match, scorecards);
+  const report = await buildPostMatchEdaReport(match, scorecards);
+  const intel = report.intel;
   const isReportReady = match.matchEnded && intel.inningsSummaries.length > 0;
   const { commentarySession, blogs, coverageAvailable } = coverage;
 
@@ -65,6 +67,9 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
           <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">
             {match.status}
           </span>
+          <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">
+            Confidence {Math.round(report.confidence.score)}% · {report.confidence.label}
+          </span>
         </div>
       </div>
 
@@ -73,6 +78,14 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
         <p className="mt-1 text-sm text-gray-400">Scorecard-derived analytics cards for quick post-match pattern reading.</p>
         <div className="mt-5">
           <EdaCards cards={intel.edaCards} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+        <h2 className="text-lg font-bold text-white">Historical Benchmarks</h2>
+        <p className="mt-1 text-sm text-gray-400">How the result compares against venue and rivalry baselines from the local warehouse.</p>
+        <div className="mt-5">
+          <EdaCards cards={report.benchmarkCards} />
         </div>
       </div>
 
@@ -146,6 +159,32 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
           </div>
 
           <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+            <h2 className="text-lg font-bold text-white">Historical Context</h2>
+            <div className="mt-4 space-y-3 text-sm text-gray-300">
+              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+                <p className="font-semibold text-white">Venue</p>
+                <p className="mt-1 text-gray-400">{report.historical.venue.summary}</p>
+              </div>
+              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+                <p className="font-semibold text-white">Head-to-head</p>
+                <p className="mt-1 text-gray-400">{report.historical.headToHead.summary}</p>
+              </div>
+              {report.historical.winnerForm ? (
+                <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+                  <p className="font-semibold text-white">Winner form</p>
+                  <p className="mt-1 text-gray-400">{report.historical.winnerForm.summary}</p>
+                </div>
+              ) : null}
+              {report.historical.loserForm ? (
+                <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+                  <p className="font-semibold text-white">Opponent form</p>
+                  <p className="mt-1 text-gray-400">{report.historical.loserForm.summary}</p>
+                </div>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
             <h2 className="text-lg font-bold text-white">Coverage Links</h2>
             <div className="mt-4 space-y-3 text-sm">
               {!coverageAvailable ? (
@@ -198,6 +237,15 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
           </div>
         </div>
       </div>
+
+      <EdaAskPanel
+        matchId={match.id}
+        suggestions={[
+          "What decided this match more than the raw margin suggests?",
+          ...intel.turningPoints.slice(0, 2),
+          "How did the result compare with venue and rivalry history?",
+        ]}
+      />
     </div>
   );
 }

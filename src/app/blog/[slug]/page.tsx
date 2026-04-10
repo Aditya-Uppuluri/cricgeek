@@ -555,7 +555,7 @@ export default function BlogSlugPage({
                     <span>📝 {blog.score.wordCount} words</span>
                     {blog.score.scoreVersion && <span>🧠 {blog.score.scoreVersion}</span>}
                     <span>
-                      ✅ {blog.score.statsVerified}/{blog.score.statsFound} direct stats verified
+                      ✅ {blog.score.statsVerified}/{blog.score.statsFound} direct stat checks passed
                     </span>
                     {blog.score.factCheckJson?.historicalClaims?.claimsResolved ? (
                       <span>
@@ -640,7 +640,11 @@ export default function BlogSlugPage({
                   <p className="mt-2 text-lg font-black text-white">
                     {blog.score.factCheckJson.directStats?.claimsVerified ?? 0}/{blog.score.factCheckJson.directStats?.claimsFound ?? 0}
                   </p>
-                  <p className="mt-1 text-xs text-gray-400">Scorecard verified</p>
+                  <p className="mt-1 text-xs text-gray-400">
+                    {blog.score.factCheckJson.directStats?.source === "fallback"
+                      ? "Heuristic fallback"
+                      : "Scorecard verified"}
+                  </p>
                 </div>
                 <div className="rounded-lg border border-gray-800 bg-cg-dark p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">Historical Warehouse</p>
@@ -797,7 +801,9 @@ export default function BlogSlugPage({
               <div className="bg-cg-green/5 border border-cg-green/20 rounded-lg px-4 py-2 mb-6 flex items-center gap-2 text-sm">
                 <span className="text-cg-green">✅</span>
                 <span className="text-gray-300">
-                  {blog.score.statsVerified}/{blog.score.statsFound} direct match stats verified from the scorecard
+                  {blog.score.factCheckJson?.directStats?.source === "fallback"
+                    ? `${blog.score.statsVerified}/${blog.score.statsFound} direct stat references checked via heuristic fallback`
+                    : `${blog.score.statsVerified}/${blog.score.statsFound} direct match stats verified from the scorecard`}
                 </span>
               </div>
             )}

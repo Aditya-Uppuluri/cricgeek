@@ -66,6 +66,7 @@ async function main() {
       content: blog.content,
       matchId: blog.matchTag,
     });
+    const directStats = result.factCheck.directStats;
     const paragraphScoresJson = result.paragraphScores as unknown as Prisma.InputJsonValue;
     const explanationJson = result.explanation as unknown as Prisma.InputJsonValue;
     const factCheckJson = result.factCheck as unknown as Prisma.InputJsonValue;
@@ -83,8 +84,8 @@ async function main() {
         archetypeLabel: result.modelScores.archetypeLabel,
         archetypeConfidence: result.modelScores.archetypeConfidence,
         entitiesFound: result.nerResult.entities.length,
-        statsFound: result.nerResult.statsFound.length,
-        statsVerified: result.statsVerified,
+        statsFound: directStats.claimsFound,
+        statsVerified: directStats.claimsVerified,
         statAccuracy: result.statAccuracy,
         constructiveness: result.ruleEngine.constructiveness,
         evidencePresence: result.ruleEngine.evidencePresence,
@@ -115,8 +116,8 @@ async function main() {
         archetypeLabel: result.modelScores.archetypeLabel,
         archetypeConfidence: result.modelScores.archetypeConfidence,
         entitiesFound: result.nerResult.entities.length,
-        statsFound: result.nerResult.statsFound.length,
-        statsVerified: result.statsVerified,
+        statsFound: directStats.claimsFound,
+        statsVerified: directStats.claimsVerified,
         statAccuracy: result.statAccuracy,
         constructiveness: result.ruleEngine.constructiveness,
         evidencePresence: result.ruleEngine.evidencePresence,

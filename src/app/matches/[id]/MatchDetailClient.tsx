@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import Image from "next/image";
 import Link from "next/link";
 import { BarChart3, ChevronRight, Radio, RefreshCw } from "lucide-react";
 import type { Match, Scorecard, Commentary, Squad } from "@/types/cricket";
@@ -8,6 +9,7 @@ import ScorecardTable from "@/components/matches/ScorecardTable";
 import CommentaryFeed from "@/components/matches/CommentaryFeed";
 import SquadList from "@/components/matches/SquadList";
 import MatchLiveCommentary from "@/components/matches/MatchLiveCommentary";
+import LiveEdaPanel from "@/components/matches/LiveEdaPanel";
 import AdSlot from "@/components/ads/AdSlot";
 import CricketNewsSidebar from "@/components/news/CricketNewsSidebar";
 import { cn } from "@/lib/utils";
@@ -393,9 +395,12 @@ export default function MatchDetailClient({
                 <div key={team.shortname} className="flex items-center justify-between gap-4">
                   <div className="flex min-w-0 items-center gap-4">
                     {team.img ? (
-                      <img
+                      <Image
                         src={team.img}
                         alt={team.shortname}
+                        width={40}
+                        height={40}
+                        unoptimized
                         className="h-10 w-10 rounded-full object-cover ring-1 ring-white/10"
                       />
                     ) : (
@@ -588,6 +593,13 @@ export default function MatchDetailClient({
             </div>
           )}
           {activeTab === "live" && (
+            <LiveEdaPanel
+              matchId={liveMatch.id}
+              enabled={isLive}
+              refreshToken={lastUpdated}
+            />
+          )}
+          {activeTab === "live" && (
             <div className="mt-6">
               <MatchLiveCommentary
                 matchId={liveMatch.id}
@@ -682,8 +694,8 @@ export default function MatchDetailClient({
                   AI Insights
                 </h3>
                 <p className="text-gray-400 text-sm">
-                  Open the integrated T20 decision-support view for live recommendations,
-                  model evaluation, and player explorer tooling using CricGeek match context.
+                  Open the integrated T20 decision-support view for deeper live recommendations,
+                  model evaluation, and player explorer tooling on top of the new in-page live EDA panel.
                 </p>
                 <Link
                   href={`/insights?matchId=${encodeURIComponent(liveMatch.id)}`}

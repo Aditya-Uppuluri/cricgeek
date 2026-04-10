@@ -7,6 +7,12 @@ export async function GET() {
   const ollamaUrl = process.env.OLLAMA_URL || process.env.OLLAMA_BASE_URL;
   const authUrl = process.env.AUTH_URL || process.env.NEXTAUTH_URL;
   const authSecret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
+  const newsConfigured =
+    Boolean(process.env.GNEWS_API_KEY || process.env.THENEWSAPI_API_KEY) ||
+    process.env.CRICKET_NEWS_ENABLE_MOCK === "true";
+  const ragConfigured = Boolean(
+    process.env.RAG_SERVICE_URL || (process.env.NODE_ENV !== "production" && "http://127.0.0.1:8020")
+  );
   const insightsServiceUrl =
     process.env.INSIGHTS_URL ||
     process.env.T20_INSIGHTS_URL ||
@@ -48,6 +54,8 @@ export async function GET() {
     insightsServiceUrl,
     searchConfigured: Boolean(process.env.TAVILY_API_KEY || process.env.SERPER_API_KEY),
     searchProvider: process.env.SERPER_API_KEY ? "serper" : process.env.TAVILY_API_KEY ? "tavily" : "none",
+    cricketNewsConfigured: newsConfigured,
+    ragConfigured,
     ollamaConfigured: Boolean(ollamaUrl),
     ollamaUrl: ollamaUrl || getOllamaUrl(),
     ollamaSharedSecretConfigured: Boolean(process.env.OLLAMA_SHARED_SECRET),
@@ -56,6 +64,9 @@ export async function GET() {
     historicalWarehouseAvailable: false,
     historicalWarehouseMatchesLoaded: 0,
     historicalWarehouseError: null as string | null,
+    edaStructuredReady: false,
+    edaLiveReady: false,
+    edaAskReady: false,
   };
 
   try {
@@ -74,6 +85,17 @@ export async function GET() {
     checks.historicalWarehouseError =
       error instanceof Error ? error.message : "Historical warehouse status could not be determined.";
   }
+
+  checks.edaStructuredReady =
+    checks.matchDataConfigured &&
+    checks.database &&
+    checks.historicalWarehouseAvailable;
+  checks.edaLiveReady =
+    checks.matchDataConfigured &&
+    (checks.insightsConfigured || checks.historicalWarehouseAvailable);
+  checks.edaAskReady =
+    checks.matchDataConfigured &&
+    (checks.cricketNewsConfigured || checks.ragConfigured || checks.ollamaConfigured);
 
   const ok =
     checks.database &&

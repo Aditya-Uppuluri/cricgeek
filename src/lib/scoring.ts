@@ -1054,7 +1054,18 @@ function computeOverallFactAccuracy(
   webFactCheck: WebFactCheckReport,
   fallbackAccuracy: number
 ) {
-  const directCheckable = directStats.source === "live" ? directStats.statsFound : 0;
+  const directScore =
+    directStats.source === "live"
+      ? directStats.statAccuracy
+      : directStats.statsFound > 0
+        ? clampScore(directStats.statAccuracy * 0.7 + fallbackAccuracy * 0.3, directStats.statAccuracy)
+        : clampScore(fallbackAccuracy, 75);
+  const directCheckable =
+    directStats.source === "live"
+      ? directStats.statsFound
+      : directStats.statsFound > 0
+        ? Math.max(1, Math.round(directStats.statsFound * 0.4))
+        : 0;
   const historicalClaims = webFactCheck.historicalClaims?.claimsResolved ?? 0;
   const webClaims = webFactCheck.webClaims?.claimsResearched ?? webFactCheck.claimsResearched;
   const broaderClaims = historicalClaims + webClaims;
@@ -1080,21 +1091,21 @@ function computeOverallFactAccuracy(
 
   if (directCheckable > 0 && broaderClaims > 0) {
     const blended =
-      (directStats.statAccuracy * directCheckable + broaderScore * broaderClaims) /
+      (directScore * directCheckable + broaderScore * broaderClaims) /
       (directCheckable + broaderClaims);
 
     return clampScore(blended, fallbackAccuracy);
   }
 
   if (directCheckable > 0) {
-    return directStats.statAccuracy;
+    return directScore;
   }
 
   if (broaderClaims > 0) {
     return broaderScore;
   }
 
-  return 75;
+  return clampScore(fallbackAccuracy, 75);
 }
 
 function buildFactCheckSummary(
@@ -1106,6 +1117,10 @@ function buildFactCheckSummary(
   if (directStats.source === "live" && directStats.statsFound > 0) {
     parts.push(
       `${directStats.statsVerified}/${directStats.statsFound} direct match stats matched against the live scorecard.`
+    );
+  } else if (directStats.source === "fallback" && directStats.statsFound > 0) {
+    parts.push(
+      `${directStats.statsVerified}/${directStats.statsFound} direct stat references were checked with the heuristic fallback because no SportMonks scorecard context was available.`
     );
   } else {
     parts.push("No source-backed direct match stat claims were available for scorecard verification.");
@@ -1121,9 +1136,9 @@ function buildPersistedFactCheckReport(
   webFactCheck: WebFactCheckReport,
   overallScore: number
 ): PersistedFactCheckReport {
-  const directClaimsFound = directStats.source === "live" ? directStats.statsFound : 0;
-  const directClaimsVerified = directStats.source === "live" ? directStats.statsVerified : 0;
-  const directAccuracy = directStats.source === "live" ? directStats.statAccuracy : 0;
+  const directClaimsFound = directStats.statsFound;
+  const directClaimsVerified = directStats.statsVerified;
+  const directAccuracy = directStats.statAccuracy;
 
   return {
     overallScore,
@@ -1464,7 +1479,7 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     r.explanation,
     guarded.sarcasmDetected
   );
-  const finalStatsVerified = statMetrics.source === "live" ? statMetrics.statsVerified : 0;
+  const finalStatsVerified = statMetrics.statsVerified;
   const finalStatAccuracy = overallFactAccuracy;
   const factCheck = buildPersistedFactCheckReport(statMetrics, webFactCheck, finalStatAccuracy);
 

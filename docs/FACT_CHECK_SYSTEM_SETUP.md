@@ -5,7 +5,7 @@ This BQS correctness layer now uses three lanes:
 1. `direct_match_stat`
    Verified against the live/current scorecard.
 2. `historical_structured`
-   Verified against a local historical cricket warehouse loaded from Cricsheet JSON.
+   Verified against a local historical cricket warehouse loaded from SportMonks fixtures.
 3. `web_search`
    Verified via Serper or Tavily against trusted cricket/news domains.
 
@@ -46,35 +46,29 @@ FACT_CHECK_SEARCH_DEPTH=basic
 FACT_CHECK_MAX_WEB_CLAIMS=3
 ```
 
-## 3. Download historical match data
+## 3. Load the historical warehouse from SportMonks
 
-Use the official Cricsheet JSON download and extract it locally.
-
-Official sources:
-- https://cricsheet.org/matches/
-- https://cricsheet.org/format/json/
-
-## 4. Import the historical warehouse
-
-Import a whole extracted folder:
+Import completed fixtures straight from SportMonks:
 
 ```bash
-npx tsx scripts/import-cricsheet-history.ts --dir /absolute/path/to/cricsheet-json
+npx tsx scripts/import-sportmonks-history.ts --pages 10 --per-page 100
 ```
 
-Import a sample first:
+Filter to a match type if needed:
 
 ```bash
-npx tsx scripts/import-cricsheet-history.ts --dir /absolute/path/to/cricsheet-json --limit 500
+npx tsx scripts/import-sportmonks-history.ts --pages 10 --match-type ODI
 ```
 
-Import a single match file:
+Or seed it through the admin route:
 
 ```bash
-npx tsx scripts/import-cricsheet-history.ts --file /absolute/path/to/match.json
+POST /api/admin/seed-historical-warehouse
 ```
 
-## 5. Rescore blogs
+The importer uses `/fixtures` for discovery and hydrates each completed match with `/fixtures/{id}` plus `runs`, `batting`, `bowling`, `lineup`, `league`, `venue`, `season`, and `manofmatch` includes before writing to the warehouse.
+
+## 4. Rescore blogs
 
 Once the warehouse is loaded, rescore blogs so BQS correctness uses the new historical lane:
 
@@ -82,7 +76,7 @@ Once the warehouse is loaded, rescore blogs so BQS correctness uses the new hist
 npx tsx scripts/rescore-blog-scores.ts --all
 ```
 
-## 6. Verify health
+## 5. Verify health
 
 Check:
 
@@ -95,9 +89,10 @@ Look for:
 - `historicalWarehouseMatchesLoaded > 0`
 - `searchConfigured: true`
 
-## 7. What the app does now
+## 6. What the app does now
 
 - Single-match claims stay on live scorecards.
 - Career/history/record claims are routed into the historical warehouse when they match supported query intents.
 - News/current/unstructured claims go to web retrieval.
 - If the warehouse cannot answer a structured claim, the claim is rerouted to web search instead of being dropped.
+- If no scorecard-backed direct check is available, BQS now falls back to the heuristic direct-stat path instead of silently zeroing it out.

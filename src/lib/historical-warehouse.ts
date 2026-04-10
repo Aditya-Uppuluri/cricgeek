@@ -968,3 +968,263 @@ export function buildHistoricalImportBundleFromCricsheet(
     aliases: [...aliases.values()],
   };
 }
+
+// ── SportMonks Import ─────────────────────────────────────────────────
+
+/**
+ * Raw SportMonks fixture shape (subset we care about for warehouse import).
+ * Matches the SMFixture type in sportmonks.ts without creating a circular import.
+ */
+export type SMFixtureForImport = {
+  id: number;
+  starting_at?: string | null;
+  type?: string | null;
+  status?: string | null;
+  winner_team_id?: number | null;
+  man_of_match_id?: number | null;
+  note?: string | null;
+  localteam?: { id: number; name: string; code?: string } | null;
+  visitorteam?: { id: number; name: string; code?: string } | null;
+  league?: { id: number; name: string } | null;
+  venue?: { id: number; name: string; city?: string | null } | null;
+  season?: { id: number; name?: string | null } | null;
+  runs?: Array<{
+    id: number;
+    fixture_id: number;
+    team_id: number;
+    inning: number;
+    score: number | null;
+    wickets: number | null;
+    overs: number | null;
+  }> | null;
+  batting?: Array<Record<string, unknown>> | null;
+  bowling?: Array<Record<string, unknown>> | null;
+  lineup?: Array<Record<string, unknown>> | null;
+  manofmatch?: { id: number; fullname?: string; firstname?: string; lastname?: string } | null;
+};
+
+function safeStr(value: unknown, fallback = ""): string {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function safeNum(value: unknown, fallback = 0): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/**
+ * Build a player name index from the SportMonks lineup array.
+ * Returns a Map<playerId, fullName>.
+ */
+function buildSmPlayerIndex(lineup: Array<Record<string, unknown>>): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const entry of lineup) {
+    const id = String(entry.id ?? "");
+    const fullname =
+      safeStr(entry.fullname) ||
+      [safeStr(entry.firstname), safeStr(entry.lastname)].filter(Boolean).join(" ");
+    if (id && fullname) index.set(id, fullname);
+  }
+  return index;
+}
+
+/**
+ * Converts a completed SportMonks fixture (with batting + bowling includes)
+ * into a HistoricalImportBundle ready to be upserted into the warehouse.
+ *
+ * Returns null when the fixture does not have enough data to be useful.
+ */
+export function buildHistoricalImportBundleFromSportMonks(
+  fixture: SMFixtureForImport
+): HistoricalImportBundle | null {
+  const localTeam = fixture.localteam;
+  const visitorTeam = fixture.visitorteam;
+
+  if (!localTeam || !visitorTeam) return null;
+
+  // Only import completed / result fixtures
+  const status = (fixture.status ?? "").toLowerCase();
+  const isCompleted =
+    !!fixture.winner_team_id ||
+    status.includes("finished") ||
+    status.includes("completed") ||
+    status.includes("result") ||
+    status.includes("abandoned");
+
+  if (!isCompleted) return null;
+
+  const teamA = localTeam.name;
+  const teamB = visitorTeam.name;
+  const sourceMatchId = String(fixture.id);
+  // Use a deterministic 30-char ID so upserts work
+  const matchId = createHash("sha1")
+    .update(`sportmonks:${sourceMatchId}`)
+    .digest("hex")
+    .slice(0, 30);
+
+  const startedAt = fixture.starting_at ? new Date(fixture.starting_at) : undefined;
+  const venueName = fixture.venue?.name ?? undefined;
+  const venueCity = fixture.venue?.city ?? undefined;
+  const leagueName = fixture.league?.name ?? undefined;
+  const seasonName = fixture.season?.name ?? undefined;
+
+  // Winner resolution
+  let winner: string | undefined;
+  if (fixture.winner_team_id === localTeam.id) winner = localTeam.name;
+  else if (fixture.winner_team_id === visitorTeam.id) winner = visitorTeam.name;
+
+  // Man of match
+  const mom = fixture.manofmatch;
+  const playerOfMatch = mom
+    ? safeStr(mom.fullname) ||
+      [safeStr(mom.firstname), safeStr(mom.lastname)].filter(Boolean).join(" ") ||
+      undefined
+    : undefined;
+
+  const playerIndex = buildSmPlayerIndex(fixture.lineup ?? []);
+  const battingRows: Prisma.HistoricalBattingInningsUncheckedCreateInput[] = [];
+  const bowlingRows: Prisma.HistoricalBowlingInningsUncheckedCreateInput[] = [];
+  const aliases = new Map<string, Prisma.HistoricalPlayerAliasUncheckedCreateInput>();
+
+  const ensureAlias = (playerName: string, playerKey: string) => {
+    const k = `${playerKey}:${normaliseKey(playerName)}`;
+    if (!aliases.has(k)) {
+      aliases.set(k, {
+        playerKey,
+        aliasName: playerName,
+        aliasNameKey: normaliseKey(playerName),
+        source: "sportmonks",
+      });
+    }
+  };
+
+  // Inning number by scoreboard label (S1 → 1, S2 → 2, …)
+  const scoreboardToInning = (scoreboard: unknown): number => {
+    const s = String(scoreboard ?? "");
+    const n = Number.parseInt(s.replace(/[^0-9]/g, ""), 10);
+    return Number.isFinite(n) && n > 0 ? n : 1;
+  };
+
+  // Team lookup by id
+  const teamNameById = (id: unknown): string => {
+    const tid = Number(id);
+    if (tid === localTeam.id) return localTeam.name;
+    if (tid === visitorTeam.id) return visitorTeam.name;
+    return "";
+  };
+
+  const oppositionOf = (teamName: string): string => {
+    if (teamName === localTeam.name) return visitorTeam.name;
+    if (teamName === visitorTeam.name) return localTeam.name;
+    return "";
+  };
+
+  // ── Batting rows ──────────────────────────────────────────────────
+  for (const raw of fixture.batting ?? []) {
+    const playerIdStr = String(raw.player_id ?? "");
+    const playerName =
+      playerIndex.get(playerIdStr) ||
+      safeStr(raw.player_name) ||
+      safeStr(raw.fullname) ||
+      "Unknown";
+    const playerKey = normaliseKey(playerName);
+    const inningsTeamId = Number(raw.team_id ?? 0);
+    const inningsTeam = teamNameById(inningsTeamId);
+    const inningsTeamKey = normaliseKey(inningsTeam);
+    const oppositionTeam = oppositionOf(inningsTeam);
+    const scoreId = Number(raw.score_id ?? 0);
+    const isNotOut = scoreId === 84 || scoreId === 80 || scoreId === 81 || raw.active === true;
+    const runs = safeNum(raw.score ?? raw.runs);
+    const balls = safeNum(raw.ball ?? raw.balls);
+
+    battingRows.push({
+      matchId,
+      inningsNumber: scoreboardToInning(raw.scoreboard),
+      inningsTeam: inningsTeam || teamA,
+      inningsTeamKey: inningsTeamKey || normaliseKey(teamA),
+      oppositionTeam: oppositionTeam || undefined,
+      oppositionTeamKey: normaliseKey(oppositionTeam) || undefined,
+      playerName,
+      playerNameKey: normaliseKey(playerName),
+      playerKey,
+      runs,
+      balls,
+      fours: safeNum(raw.four_x ?? raw.fours),
+      sixes: safeNum(raw.six_x ?? raw.sixes),
+      strikeRate: balls > 0 ? Math.round((runs * 10000) / balls) / 100 : 0,
+      dismissalKind: undefined,
+      notOut: isNotOut,
+    });
+
+    if (playerName !== "Unknown") ensureAlias(playerName, playerKey);
+  }
+
+  // ── Bowling rows ──────────────────────────────────────────────────
+  for (const raw of fixture.bowling ?? []) {
+    const playerIdStr = String(raw.player_id ?? "");
+    const playerName =
+      playerIndex.get(playerIdStr) ||
+      safeStr(raw.player_name) ||
+      safeStr(raw.fullname) ||
+      "Unknown";
+    const playerKey = normaliseKey(playerName);
+    // Bowling team_id is the fielding team. We need to find which team is fielding.
+    const bowlingTeamId = Number(raw.team_id ?? 0);
+    const bowlingTeam = teamNameById(bowlingTeamId);
+    const bowlingTeamKey = normaliseKey(bowlingTeam);
+    const oppositionTeam = oppositionOf(bowlingTeam);
+    const overs = safeNum(raw.overs ?? raw.o);
+    const runsConceded = safeNum(raw.runs ?? raw.r);
+    const balls = overs > 0 ? Math.round(overs * 6) : 0;
+
+    bowlingRows.push({
+      matchId,
+      inningsNumber: scoreboardToInning(raw.scoreboard),
+      inningsTeam: bowlingTeam || teamA,
+      inningsTeamKey: bowlingTeamKey || normaliseKey(teamA),
+      oppositionTeam: oppositionTeam || undefined,
+      oppositionTeamKey: normaliseKey(oppositionTeam) || undefined,
+      playerName,
+      playerNameKey: normaliseKey(playerName),
+      playerKey,
+      overs,
+      maidens: safeNum(raw.medians ?? raw.maidens),
+      runsConceded,
+      wickets: safeNum(raw.wickets ?? raw.w),
+      economy: balls > 0 ? Math.round(((runsConceded * 6) / balls) * 100) / 100 : 0,
+      dotBalls: 0, // Not available from batting/bowling summary endpoint
+    });
+
+    if (playerName !== "Unknown") ensureAlias(playerName, playerKey);
+  }
+
+  if (battingRows.length === 0 && bowlingRows.length === 0) return null;
+
+  return {
+    match: {
+      id: matchId,
+      source: "sportmonks",
+      sourceMatchId,
+      startedAt: startedAt && !Number.isNaN(startedAt.getTime()) ? startedAt : undefined,
+      season: seasonName,
+      matchType: fixture.type?.toUpperCase() ?? undefined,
+      eventName: leagueName,
+      eventNameKey: normaliseKey(leagueName),
+      venue: venueName ? (venueCity ? `${venueName}, ${venueCity}` : venueName) : undefined,
+      venueKey: normaliseKey(venueName),
+      city: venueCity,
+      teamA,
+      teamAKey: normaliseKey(teamA),
+      teamB,
+      teamBKey: normaliseKey(teamB),
+      winner,
+      winnerKey: normaliseKey(winner),
+      resultText: fixture.note ?? undefined,
+      playerOfMatch,
+      rawInfo: undefined,
+    },
+    battingRows,
+    bowlingRows,
+    aliases: [...aliases.values()],
+  };
+}
