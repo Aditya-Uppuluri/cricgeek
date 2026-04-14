@@ -172,6 +172,7 @@ export async function buildLiveEdaReport(
     venue,
   });
   const topTurningBall = analytics.topTurningBalls[0];
+  const boundaryPressure = analytics.boundaryPressure;
 
   const cards = [
     {
@@ -232,6 +233,24 @@ export async function buildLiveEdaReport(
           : "neutral" as const,
     },
     {
+      id: "boundary-pressure",
+      label: "Boundary pressure",
+      value:
+        boundaryPressure !== null
+          ? `${boundaryPressure.recentBoundaryRate}/ov`
+          : "Waiting",
+      insight:
+        boundaryPressure !== null
+          ? `${boundaryPressure.recentOversLabel}: ${boundaryPressure.recentFours}x4, ${boundaryPressure.recentSixes}x6. Forecast ${boundaryPressure.forecastBoundaryRate}/ov against a ${boundaryPressure.expectedBoundaryRate}/ov phase baseline.`
+          : "Boundary pressure appears once enough tracked ball events are available.",
+      tone:
+        boundaryPressure !== null
+          ? boundaryPressure.recentBoundaryRate >= boundaryPressure.expectedBoundaryRate
+            ? "good" as const
+            : "warning" as const
+          : "neutral" as const,
+    },
+    {
       id: "venue-par",
       label: "Venue first-innings par",
       value: venue.avgFirstInningsScore !== null ? `${venue.avgFirstInningsScore}` : "Waiting",
@@ -272,9 +291,9 @@ export async function buildLiveEdaReport(
     cards,
     summary:
       snapshot.innings === 2 && snapshot.requiredRunRate !== null
-        ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs, needing ${snapshot.requiredRunRate} per over. The current pressure index is ${snapshot.pressureIndex}${topTurningBall ? `, and the biggest recent swing came at ${topTurningBall.label}.` : "."}`
+        ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs, needing ${snapshot.requiredRunRate} per over. The current pressure index is ${snapshot.pressureIndex}${boundaryPressure ? `, with ${boundaryPressure.recentFours} fours and ${boundaryPressure.recentSixes} sixes across ${boundaryPressure.recentOversLabel.toLowerCase()}.` : topTurningBall ? `, and the biggest recent swing came at ${topTurningBall.label}.` : "."}`
         : scheduledOvers !== null
-          ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs with a projected total of ${snapshot.projectedTotal}. The current pressure index is ${snapshot.pressureIndex}${topTurningBall ? `, and the sharpest state change came at ${topTurningBall.label}.` : "."}`
+          ? `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs with a projected total of ${snapshot.projectedTotal}. The current pressure index is ${snapshot.pressureIndex}${boundaryPressure ? `, and boundary pressure is running at ${boundaryPressure.recentBoundaryRate}/over with a ${boundaryPressure.forecastBoundaryRate}/over forecast.` : topTurningBall ? `, and the sharpest state change came at ${topTurningBall.label}.` : "."}`
           : `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs. Fixed-over projections are not applied in this format, so the live read leans on wickets, tempo, and venue context.`,
     advisor,
     pollIntervalSeconds: LIVE_EDA_POLL_INTERVAL_SECONDS,

@@ -3,6 +3,7 @@ import type {
   HistoricalVenueSnapshot,
   LiveAnalyticsBundle,
   LiveBarDatum,
+  LiveBoundaryPressureSummary,
   LiveHeatmapCell,
   LiveImpactDatum,
   LiveMatchupCell,
@@ -63,6 +64,32 @@ function phaseBaseRunRate(matchType: string, phase: string) {
   if (phase.includes("Opening")) return 3.2;
   if (phase.includes("Old-ball")) return 3.8;
   return 3.4;
+}
+
+function phaseBaseBoundaryRate(matchType: string, phase: string) {
+  const scheduledOvers = getScheduledOvers(matchType);
+
+  if (scheduledOvers === 10) {
+    if (phase === "Powerplay") return 2.2;
+    if (phase === "Middle") return 1.9;
+    return 2.6;
+  }
+
+  if (scheduledOvers === 20) {
+    if (phase === "Powerplay") return 1.9;
+    if (phase === "Middle") return 1.45;
+    return 2.2;
+  }
+
+  if (scheduledOvers === 50) {
+    if (phase === "Powerplay") return 1.15;
+    if (phase === "Middle") return 0.95;
+    return 1.45;
+  }
+
+  if (phase.includes("Opening")) return 0.75;
+  if (phase.includes("Old-ball")) return 1.05;
+  return 0.9;
 }
 
 function statePressureIndex(input: {
@@ -181,6 +208,26 @@ function sortBallsAscending(balls: BallByBall[]) {
     if (left.ball !== right.ball) return left.ball - right.ball;
     return left.id.localeCompare(right.id);
   });
+}
+
+function sliceTrailingInningsBalls(balls: BallByBall[]) {
+  const ordered = sortBallsAscending(balls);
+  if (ordered.length <= 1) return ordered;
+
+  const trailing: BallByBall[] = [];
+  let latestOver = Number.POSITIVE_INFINITY;
+
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const ball = ordered[index];
+    if (trailing.length > 0 && ball.over > latestOver) {
+      break;
+    }
+
+    trailing.push(ball);
+    latestOver = ball.over;
+  }
+
+  return trailing.reverse();
 }
 
 function buildBallStates(
@@ -658,6 +705,78 @@ function buildTimelineSeries(states: BallState[]) {
   return { winProbability, control, pressure };
 }
 
+function buildBoundaryPressureSummary(
+  states: BallState[],
+  match: Match
+): LiveBoundaryPressureSummary | null {
+  if (states.length === 0) return null;
+
+  const latestState = states[states.length - 1];
+  const recentOvers = [...new Set(states.map((state) => state.ball.over))].slice(-2);
+  const recentWindow = states.filter((state) => recentOvers.includes(state.ball.over));
+  const recentLegalBalls = recentWindow.filter((state) => state.ball.legalBall !== false).length;
+  const inningsLegalBalls = states.filter((state) => state.ball.legalBall !== false).length;
+  const recentOversUsed = Math.max(recentOvers.length, recentLegalBalls / 6, 0.1);
+  const inningsOversUsed = Math.max(latestState.oversUsed, 0.1);
+  const recentBoundaryBalls = recentWindow.filter((state) => state.ball.isBoundary).length;
+  const recentFours = recentWindow.filter((state) => state.ball.isFour).length;
+  const recentSixes = recentWindow.filter((state) => state.ball.isSix).length;
+  const recentBoundaryRuns = recentWindow.reduce(
+    (sum, state) => sum + (state.ball.isFour ? 4 : 0) + (state.ball.isSix ? 6 : 0),
+    0
+  );
+  const recentRuns = recentWindow.reduce((sum, state) => sum + state.ball.score, 0);
+  const recentBoundaryRate = round(recentBoundaryBalls / recentOversUsed, 2);
+  const recentBoundaryRunShare =
+    recentRuns > 0 ? round((recentBoundaryRuns / recentRuns) * 100, 1) : 0;
+  const inningsBoundaryBalls = states.filter((state) => state.ball.isBoundary).length;
+  const inningsBoundaryRate = round(inningsBoundaryBalls / inningsOversUsed, 2);
+  const expectedBoundaryRate = round(
+    phaseBaseBoundaryRate(match.matchType, inferPhase(latestState.oversUsed, match.matchType)),
+    2
+  );
+  const forecastBoundaryRate = round(
+    recentBoundaryRate * 0.6 + inningsBoundaryRate * 0.2 + expectedBoundaryRate * 0.2,
+    2
+  );
+  const pressureIndex = clamp(
+    round(
+      45 +
+        (recentBoundaryRate - expectedBoundaryRate) * 18 +
+        (forecastBoundaryRate - expectedBoundaryRate) * 10 +
+        recentSixes * 4 +
+        Math.max(0, recentBoundaryRunShare - 45) * 0.5,
+      1
+    ),
+    0,
+    100
+  );
+
+  const recentLabel =
+    recentOvers.length > 0
+      ? recentOvers.length === 1
+        ? `Over ${recentOvers[0]}`
+        : `Overs ${recentOvers[0]}-${recentOvers[recentOvers.length - 1]}`
+      : "Last 2 overs";
+
+  return {
+    recentOversLabel: recentLabel,
+    recentBoundaryBalls,
+    recentFours,
+    recentSixes,
+    recentBoundaryRuns,
+    recentBoundaryRate,
+    recentBoundaryRunShare,
+    inningsBoundaryRate,
+    expectedBoundaryRate,
+    forecastBoundaryRate,
+    pressureIndex,
+    note:
+      `${recentLabel}: ${recentFours} four${recentFours === 1 ? "" : "s"} and ${recentSixes} six${recentSixes === 1 ? "" : "es"}. ` +
+      `Measured boundary rate ${recentBoundaryRate}/over, forecast ${forecastBoundaryRate}/over, phase baseline ${expectedBoundaryRate}/over.`,
+  };
+}
+
 function pickCurrentInning(scorecards: Scorecard[] | null, snapshot: LivePressureSnapshot) {
   if (!scorecards || scorecards.length === 0) return null;
 
@@ -674,7 +793,9 @@ export function buildLiveAnalyticsBundle(input: {
   snapshot: LivePressureSnapshot;
   venue: HistoricalVenueSnapshot;
 }): LiveAnalyticsBundle {
-  if (input.commentaryBalls.length === 0) {
+  const currentInningsBalls = sliceTrailingInningsBalls(input.commentaryBalls);
+
+  if (currentInningsBalls.length === 0) {
     return {
       ballWinProbability: [],
       matchControlSwing: [],
@@ -689,12 +810,14 @@ export function buildLiveAnalyticsBundle(input: {
       requiredVsActualRate: [],
       dotBallHeatmap: [],
       matchupMatrix: [],
+      boundaryPressure: null,
     };
   }
 
-  const states = buildBallStates(input.match, input.commentaryBalls, input.snapshot, input.venue);
+  const states = buildBallStates(input.match, currentInningsBalls, input.snapshot, input.venue);
   const timelines = buildTimelineSeries(states);
   const currentInning = pickCurrentInning(input.scorecards, input.snapshot);
+  const boundaryPressure = buildBoundaryPressureSummary(states, input.match);
 
   return {
     ballWinProbability: timelines.winProbability,
@@ -710,5 +833,6 @@ export function buildLiveAnalyticsBundle(input: {
     requiredVsActualRate: buildRateTimeline(states, input.match, input.venue),
     dotBallHeatmap: buildHeatmap(states, input.match),
     matchupMatrix: buildMatchupMatrix(states),
+    boundaryPressure,
   };
 }

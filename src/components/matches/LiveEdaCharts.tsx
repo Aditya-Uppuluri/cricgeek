@@ -2,6 +2,7 @@ import { cn } from "@/lib/utils";
 import type {
   LiveAnalyticsBundle,
   LiveBarDatum,
+  LiveBoundaryPressureSummary,
   LiveHeatmapCell,
   LiveMatchupCell,
   LivePartnershipDatum,
@@ -420,6 +421,64 @@ function MatchupMatrix({ data }: { data: LiveMatchupCell[] }) {
   );
 }
 
+function BoundaryPressurePanel({ summary }: { summary: LiveBoundaryPressureSummary | null }) {
+  if (!summary) {
+    return <EmptyChart message="Boundary pressure will appear once the live feed has enough tracked balls." />;
+  }
+
+  const rateMax = Math.max(summary.recentBoundaryRate, summary.forecastBoundaryRate, summary.expectedBoundaryRate, 0.1);
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-gray-500">{summary.recentOversLabel}</p>
+          <p className="mt-1 text-lg font-black text-white">{summary.recentBoundaryBalls} boundaries</p>
+          <p className="mt-1 text-xs text-gray-400">{summary.recentFours}x4, {summary.recentSixes}x6</p>
+        </div>
+        <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Measured rate</p>
+          <p className="mt-1 text-lg font-black text-white">{summary.recentBoundaryRate}/over</p>
+          <p className="mt-1 text-xs text-gray-400">Innings rate {summary.inningsBoundaryRate}/over</p>
+        </div>
+        <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Forecast rate</p>
+          <p className="mt-1 text-lg font-black text-white">{summary.forecastBoundaryRate}/over</p>
+          <p className="mt-1 text-xs text-gray-400">Phase baseline {summary.expectedBoundaryRate}/over</p>
+        </div>
+        <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+          <p className="text-xs uppercase tracking-[0.18em] text-gray-500">Boundary share</p>
+          <p className="mt-1 text-lg font-black text-white">{summary.recentBoundaryRunShare}%</p>
+          <p className="mt-1 text-xs text-gray-400">Pressure index {summary.pressureIndex}</p>
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
+        {[
+          { label: "Measured", value: summary.recentBoundaryRate, colorClass: "bg-cg-green" },
+          { label: "Forecast", value: summary.forecastBoundaryRate, colorClass: "bg-blue-400" },
+          { label: "Baseline", value: summary.expectedBoundaryRate, colorClass: "bg-amber-400" },
+        ].map((entry) => (
+          <div key={entry.label}>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm font-semibold text-white">{entry.label}</p>
+              <p className="text-sm font-black text-white">{entry.value}/over</p>
+            </div>
+            <div className="mt-2 h-2 rounded-full bg-white/5">
+              <div
+                className={cn("h-full rounded-full", entry.colorClass)}
+                style={{ width: `${(entry.value / rateMax) * 100}%` }}
+              />
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <p className="text-sm text-gray-400">{summary.note}</p>
+    </div>
+  );
+}
+
 export default function LiveEdaCharts({ analytics }: LiveEdaChartsProps) {
   return (
     <div className="grid gap-5 xl:grid-cols-2">
@@ -517,6 +576,13 @@ export default function LiveEdaCharts({ analytics }: LiveEdaChartsProps) {
         subtitle="Quick scenario tests around the current trend, surge, squeeze, and venue-par finish."
       >
         <ScenarioBars data={analytics.counterfactuals} />
+      </ChartFrame>
+
+      <ChartFrame
+        title="Boundary pressure pulse"
+        subtitle="Recent fours and sixes with measured versus forecast boundary frequency."
+      >
+        <BoundaryPressurePanel summary={analytics.boundaryPressure} />
       </ChartFrame>
 
       <ChartFrame

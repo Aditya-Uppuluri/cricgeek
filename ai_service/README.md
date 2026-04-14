@@ -7,11 +7,18 @@ A Python FastAPI microservice that loads open-source HuggingFace models and scor
 | Model | Task | HuggingFace ID |
 |---|---|---|
 | BART-MNLI | Archetype classification (Fan/Analyst/Storyteller/Debater) | `facebook/bart-large-mnli` |
-| RoBERTa | Tone & constructiveness | `cardiffnlp/twitter-roberta-base-sentiment-latest` |
+| RoBERTa | Sentiment support for negativity reads | `cardiffnlp/twitter-roberta-base-sentiment-latest` |
 | Toxic-BERT | Toxicity detection | `martin-ha/toxic-comment-model` |
-| MiniLM | Coherence + originality via sentence embeddings | `sentence-transformers/all-MiniLM-L6-v2` |
+| BGE Large | Coherence + originality via dense embeddings | `BAAI/bge-large-en-v1.5` |
 
-Models are downloaded to `~/.cache/huggingface/` on first run (~3–5 GB total).
+Models are downloaded to `~/.cache/huggingface/` on first run.
+You can optionally point originality scoring at a larger reference corpus with:
+
+```env
+BQS_REFERENCE_CORPUS_PATH=/absolute/path/to/corpus.json
+```
+
+If unset, the service falls back to `src/data/bqs-calibration.json`.
 
 ## Setup
 
@@ -73,7 +80,8 @@ Score a blog post.
 ```json
 {
   "text": "Jasprit Bumrah is arguably the best fast bowler in the world right now...",
-  "blog_id": "optional-id"
+  "blog_id": "optional-id",
+  "skip_fact_check": false
 }
 ```
 
@@ -84,12 +92,14 @@ Score a blog post.
   "archetype_confidence": 0.71,
   "bqs": 83.15,
   "constructiveness": 88.0,
+  "negativity_score": 18.0,
   "toxicity_score": 2.1,
   "originality_score": 79.0,
   "coherence_score": 81.0,
   "argument_logic": 66.0,
   "stat_accuracy": 80.0,
   "info_density": 71.0,
+  "score_version": "hf-bge-bart-v1",
   "word_count": 187,
   "lexical_diversity": 0.74,
   ...

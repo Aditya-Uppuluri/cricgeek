@@ -181,6 +181,21 @@ export interface LiveMatchupCell {
   threat: number;
 }
 
+export interface LiveBoundaryPressureSummary {
+  recentOversLabel: string;
+  recentBoundaryBalls: number;
+  recentFours: number;
+  recentSixes: number;
+  recentBoundaryRuns: number;
+  recentBoundaryRate: number;
+  recentBoundaryRunShare: number;
+  inningsBoundaryRate: number;
+  expectedBoundaryRate: number;
+  forecastBoundaryRate: number;
+  pressureIndex: number;
+  note: string;
+}
+
 export interface LiveAnalyticsBundle {
   ballWinProbability: LiveTimelinePoint[];
   matchControlSwing: LiveTimelinePoint[];
@@ -195,6 +210,7 @@ export interface LiveAnalyticsBundle {
   requiredVsActualRate: LiveTimelinePoint[];
   dotBallHeatmap: LiveHeatmapCell[];
   matchupMatrix: LiveMatchupCell[];
+  boundaryPressure: LiveBoundaryPressureSummary | null;
 }
 
 export interface LiveEdaReport {

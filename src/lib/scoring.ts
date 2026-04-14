@@ -12,6 +12,7 @@
  */
 
 import { getMatchScorecard } from "@/lib/cricket-api";
+import { forwardAiService } from "@/lib/ai-service";
 import {
   runWebFactCheck,
   type FactCheckSource,
@@ -239,6 +240,7 @@ interface OllamaScoreResponse {
   archetype: Archetype;
   archetype_confidence: number;
   final_bqs?: number;
+  score_version?: string;
   tone_score: number;
   negativity_score: number;
   toxicity_score: number;
@@ -572,6 +574,39 @@ function normaliseWriterDNASignal(
     storyteller: normalised.find((entry) => entry.key === "storyteller")?.value ?? 0,
     debater: normalised.find((entry) => entry.key === "debater")?.value ?? 0,
   };
+}
+
+async function callAiServiceScorer(input: {
+  title?: string;
+  content: string;
+}): Promise<OllamaScoreResponse | null> {
+  try {
+    const response = await forwardAiService("/score", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        text: input.content,
+        include_fact_check: false,
+        skip_fact_check: true,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn("[scoring] AI service scorer error:", response.status, response.body);
+      return null;
+    }
+
+    const parsed = JSON.parse(response.body) as unknown;
+    if (!parsed || typeof parsed !== "object" || !("archetype" in parsed)) {
+      console.warn("[scoring] AI service scorer returned an invalid payload");
+      return null;
+    }
+
+    return parsed as OllamaScoreResponse;
+  } catch (error) {
+    console.warn("[scoring] AI service scorer unavailable — falling back to Ollama", error);
+    return null;
+  }
 }
 
 async function callOllamaScorer(input: { title?: string; content: string }): Promise<OllamaScoreResponse | null> {
@@ -1690,8 +1725,10 @@ export async function runScoringPipeline(input: string | { title?: string; conte
   });
   const fallback = heuristicScore(text, pp, statMetrics);
 
-  // Steps 2–7: Try Ollama, fall back to heuristics
-  const aiResult = await callOllamaScorer(payload);
+  // Steps 2–7: Prefer the Python AI service, then Ollama, then heuristics
+  const aiServiceResult = await callAiServiceScorer(payload);
+  const ollamaResult = aiServiceResult ? null : await callOllamaScorer(payload);
+  const aiResult = aiServiceResult ?? ollamaResult;
   const r = aiResult ?? fallback;
   const paragraphs = text
     .split(/\n\s*\n/)
@@ -1813,7 +1850,9 @@ export async function runScoringPipeline(input: string | { title?: string; conte
     statAccuracy: finalStatAccuracy,
     factCheck,
     processingTimeMs: Date.now() - started,
-    scoreVersion: aiResult ? "qwen3.5-v6-deterministic-bqs" : "heuristic-fallback-v2",
+    scoreVersion:
+      aiServiceResult?.score_version ||
+      (ollamaResult ? "qwen3.5-v6-deterministic-bqs" : "heuristic-fallback-v2"),
   };
 }
 

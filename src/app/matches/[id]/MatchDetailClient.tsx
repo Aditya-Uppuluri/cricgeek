@@ -46,6 +46,65 @@ function getScheduledOvers(matchType: string) {
   return null;
 }
 
+function normalisePlayerName(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function sortCommentaryBalls(balls: Commentary["bbb"]) {
+  return [...balls].sort((left, right) => {
+    const leftTime = new Date(left.timestamp).getTime();
+    const rightTime = new Date(right.timestamp).getTime();
+
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime;
+    }
+
+    if (left.over !== right.over) return left.over - right.over;
+    if (left.ball !== right.ball) return left.ball - right.ball;
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function sliceTrailingInningsBalls(balls: Commentary["bbb"]) {
+  const ordered = sortCommentaryBalls(balls);
+  if (ordered.length <= 1) return ordered;
+
+  const trailing: Commentary["bbb"] = [];
+  let latestOver = Number.POSITIVE_INFINITY;
+
+  for (let index = ordered.length - 1; index >= 0; index -= 1) {
+    const ball = ordered[index];
+    if (trailing.length > 0 && ball.over > latestOver) {
+      break;
+    }
+
+    trailing.push(ball);
+    latestOver = ball.over;
+  }
+
+  return trailing.reverse();
+}
+
+function getRollingOverWindow(commentary: Commentary | null, oversWindow = 4) {
+  const balls = commentary?.bbb ? sliceTrailingInningsBalls(commentary.bbb) : [];
+  const overs = [...new Set(balls.map((ball) => ball.over))];
+  const latestOverIndex = overs.length - 1;
+  const blockStartIndex =
+    latestOverIndex >= 0 ? Math.floor(latestOverIndex / oversWindow) * oversWindow : 0;
+  const recentOvers = overs.slice(blockStartIndex, blockStartIndex + oversWindow);
+  const recentBalls = balls.filter((ball) => recentOvers.includes(ball.over));
+
+  return {
+    recentBalls,
+    label:
+      recentOvers.length === 0
+        ? "Live window unavailable"
+        : recentOvers.length === 1
+          ? `4-over leaders · over ${recentOvers[0]}`
+          : `4-over leaders · overs ${recentOvers[0]}-${recentOvers[recentOvers.length - 1]}`,
+  };
+}
+
 function scoreMatchesTeam(score: Match["score"][number], team: Match["teamInfo"][number]) {
   const inning = score.inning.toLowerCase();
   return inning.includes(team.name.toLowerCase()) || inning.includes(team.shortname.toLowerCase());
@@ -69,7 +128,7 @@ function scoreMatchesInningLabel(score: Match["score"][number] | undefined, inni
   return score.inning.toLowerCase().includes(inningLabel.toLowerCase());
 }
 
-function getPrimaryScore(scorecard: Scorecard[] | null) {
+function getPrimaryScore(scorecard: Scorecard[] | null, commentary: Commentary | null, matchEnded: boolean) {
   if (!scorecard || scorecard.length === 0) return null;
 
   const activeInnings =
@@ -81,14 +140,134 @@ function getPrimaryScore(scorecard: Scorecard[] | null) {
   if (!activeInnings) return null;
 
   const liveBatters = activeInnings.batting.filter((entry) => entry.dismissal === "batting");
-  const featuredBatters = (liveBatters.length > 0 ? liveBatters : activeInnings.batting)
-    .slice(0, 2);
-  const featuredBowlers = [...activeInnings.bowling]
+  const battingIndex = new Map(
+    activeInnings.batting.map((entry) => [normalisePlayerName(entry.batsman.name), entry] as const)
+  );
+  const bowlingIndex = new Map(
+    activeInnings.bowling.map((entry) => [normalisePlayerName(entry.bowler.name), entry] as const)
+  );
+
+  const appendUniqueBatters = (
+    preferred: Scorecard["batting"],
+    fallback: Scorecard["batting"]
+  ) => {
+    const selected: Scorecard["batting"] = [];
+    const seen = new Set<string>();
+    for (const entry of [...preferred, ...fallback]) {
+      const key = entry.batsman.id || normalisePlayerName(entry.batsman.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      selected.push(entry);
+      if (selected.length >= 2) break;
+    }
+    return selected;
+  };
+
+  const appendUniqueBowlers = (
+    preferred: Scorecard["bowling"],
+    fallback: Scorecard["bowling"]
+  ) => {
+    const selected: Scorecard["bowling"] = [];
+    const seen = new Set<string>();
+    for (const entry of [...preferred, ...fallback]) {
+      const key = entry.bowler.id || normalisePlayerName(entry.bowler.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      selected.push(entry);
+      if (selected.length >= 2) break;
+    }
+    return selected;
+  };
+
+  const liveBatterFallback = (liveBatters.length > 0 ? liveBatters : activeInnings.batting).slice(0, 2);
+  const overallBattingLeaders = [...activeInnings.batting]
+    .sort((left, right) => {
+      if (right.r !== left.r) return right.r - left.r;
+      return Number(right.sr) - Number(left.sr);
+    });
+  const overallBowlingLeaders = [...activeInnings.bowling]
     .sort((left, right) => {
       if (right.w !== left.w) return right.w - left.w;
+      if (Number(left.eco) !== Number(right.eco)) return Number(left.eco) - Number(right.eco);
       return Number(right.o) - Number(left.o);
-    })
-    .slice(0, 2);
+    });
+
+  let featuredBatters = appendUniqueBatters(liveBatterFallback, overallBattingLeaders);
+  let featuredBowlers = appendUniqueBowlers(overallBowlingLeaders, overallBowlingLeaders);
+  let batterContextLabel = matchEnded ? "Final innings leaders" : "Current batters";
+  let bowlerContextLabel = matchEnded ? "Final innings leaders" : "Current bowling leaders";
+
+  if (!matchEnded && commentary?.bbb?.length) {
+    const rollingWindow = getRollingOverWindow(commentary, 4);
+    const batterWindow = new Map<string, { runs: number; balls: number; boundaries: number }>();
+    const bowlerWindow = new Map<string, { wickets: number; runs: number; balls: number; dots: number }>();
+
+    for (const ball of rollingWindow.recentBalls) {
+      const batterKey = normalisePlayerName(ball.batsman);
+      const bowlerKey = normalisePlayerName(ball.bowler);
+
+      if (batterKey) {
+        const current = batterWindow.get(batterKey) ?? { runs: 0, balls: 0, boundaries: 0 };
+        current.runs += ball.batsmanRuns ?? Math.max(0, ball.score - (ball.extras ?? 0) - (ball.byes ?? 0) - (ball.legByes ?? 0));
+        current.balls += ball.legalBall === false ? 0 : 1;
+        current.boundaries += ball.isBoundary ? 1 : 0;
+        batterWindow.set(batterKey, current);
+      }
+
+      if (bowlerKey) {
+        const current = bowlerWindow.get(bowlerKey) ?? { wickets: 0, runs: 0, balls: 0, dots: 0 };
+        current.wickets += ball.isWicket ? 1 : 0;
+        current.runs += ball.score;
+        current.balls += ball.legalBall === false ? 0 : 1;
+        current.dots += ball.score === 0 ? 1 : 0;
+        bowlerWindow.set(bowlerKey, current);
+      }
+    }
+
+    const rollingBatters = [...batterWindow.entries()]
+      .map(([key, value]) => ({
+        key,
+        entry: battingIndex.get(key),
+        runs: value.runs,
+        strikeRate: value.balls > 0 ? (value.runs * 100) / value.balls : 0,
+        boundaries: value.boundaries,
+      }))
+      .filter((item): item is { key: string; entry: NonNullable<typeof item.entry>; runs: number; strikeRate: number; boundaries: number } => Boolean(item.entry))
+      .sort((left, right) => {
+        if (right.runs !== left.runs) return right.runs - left.runs;
+        if (right.strikeRate !== left.strikeRate) return right.strikeRate - left.strikeRate;
+        return right.boundaries - left.boundaries;
+      })
+      .map((item) => item.entry);
+
+    const rollingBowlers = [...bowlerWindow.entries()]
+      .map(([key, value]) => ({
+        key,
+        entry: bowlingIndex.get(key),
+        wickets: value.wickets,
+        economy: value.balls > 0 ? (value.runs * 6) / value.balls : Number.POSITIVE_INFINITY,
+        dots: value.dots,
+        balls: value.balls,
+      }))
+      .filter((item): item is { key: string; entry: NonNullable<typeof item.entry>; wickets: number; economy: number; dots: number; balls: number } => Boolean(item.entry))
+      .sort((left, right) => {
+        if (right.wickets !== left.wickets) return right.wickets - left.wickets;
+        if (left.economy !== right.economy) return left.economy - right.economy;
+        if (right.dots !== left.dots) return right.dots - left.dots;
+        return right.balls - left.balls;
+      })
+      .map((item) => item.entry);
+
+    if (rollingBatters.length > 0) {
+      featuredBatters = appendUniqueBatters(rollingBatters, liveBatterFallback);
+      batterContextLabel = rollingWindow.label;
+    }
+
+    if (rollingBowlers.length > 0) {
+      featuredBowlers = appendUniqueBowlers(rollingBowlers, overallBowlingLeaders);
+      bowlerContextLabel = rollingWindow.label;
+    }
+  }
 
   return {
     inning: activeInnings,
@@ -98,6 +277,8 @@ function getPrimaryScore(scorecard: Scorecard[] | null) {
         : "0.00",
     featuredBatters,
     featuredBowlers,
+    batterContextLabel,
+    bowlerContextLabel,
   };
 }
 
@@ -173,15 +354,7 @@ function InningsSplitView({ scorecards, selectedInning, onSelectInning }: Inning
       {/* Innings toggle tabs */}
       <div className="border-b border-white/8 bg-[#141718]/90">
         {/* Header row with innings label + toggle tabs */}
-        <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="shrink-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.24em] text-[#8e887d]">
-              Innings Arena
-            </p>
-            <p className="mt-1 text-xs text-[#a79f94]">
-              Tap a ball to switch innings perspective
-            </p>
-          </div>
+        <div className="flex flex-col gap-3 px-5 py-4 sm:flex-row sm:items-center sm:justify-end">
           {scorecards.length > 1 && (
             <div className="innings-ball-rack">
               {scorecards.map((card, i) => {
@@ -354,7 +527,7 @@ export default function MatchDetailClient({
     minute: "2-digit",
     second: "2-digit",
   });
-  const primaryScore = getPrimaryScore(liveScorecard);
+  const primaryScore = getPrimaryScore(liveScorecard, liveCommentary, liveMatch.matchEnded);
   const scheduledOvers = getScheduledOvers(liveMatch.matchType);
   const teamScoreRows = getTeamScoreRows(liveMatch).sort((left, right) => {
     const leftPriority = scoreMatchesInningLabel(left.score, primaryScore?.inning.inning ?? "") ? 1 : 0;
@@ -519,8 +692,9 @@ export default function MatchDetailClient({
               <div className="grid gap-px bg-white/8 lg:grid-cols-[1.3fr,0.9fr]">
                 <div className="bg-[#171a1b] px-6 py-5">
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#8e887d]">
-                    Batters
+                    Top batters
                   </p>
+                  <p className="mt-1 text-xs text-[#a79f94]">{primaryScore.batterContextLabel}</p>
                   <div className="mt-4 overflow-x-auto">
                     <table className="w-full min-w-[420px] text-sm">
                       <thead className="text-[#8f897f]">
@@ -554,8 +728,9 @@ export default function MatchDetailClient({
 
                 <div className="bg-[#171a1b] px-6 py-5">
                   <p className="text-xs font-semibold uppercase tracking-[0.22em] text-[#8e887d]">
-                    Bowling card
+                    Top bowlers
                   </p>
+                  <p className="mt-1 text-xs text-[#a79f94]">{primaryScore.bowlerContextLabel}</p>
                   <div className="mt-4 space-y-4">
                     {primaryScore.featuredBowlers.map((entry) => (
                       <div key={entry.bowler.id} className="border-b border-white/6 pb-4 last:border-b-0 last:pb-0">

@@ -126,12 +126,14 @@ class ScoreRequest(BaseModel):
     text: str
     blog_id: str = ""
     include_fact_check: bool = False
+    skip_fact_check: bool = False
 
 
 class ScoreResponse(BaseModel):
     archetype: str
     archetype_confidence: float
     tone_score: float
+    negativity_score: float
     toxicity_score: float
     originality_score: float
     coherence_score: float
@@ -150,7 +152,18 @@ class ScoreResponse(BaseModel):
     word_count: int
     lexical_diversity: float
     sentence_variety: float
+    avg_sentence_length: float
     bqs: float
+    toxicity_penalty_applied: bool
+    toxicity_penalty_override: bool
+    writer_dna: Optional[dict] = None
+    paragraph_scores: Optional[list[dict]] = None
+    explanation: Optional[dict] = None
+    score_version: str
+    reference_corpus_size: int
+    reference_corpus_source: str
+    max_reference_similarity: Optional[float] = None
+    adjacent_similarity: Optional[float] = None
     processing_time_ms: int
     fact_check: Optional[dict] = None
 
@@ -223,12 +236,12 @@ async def score_blog(req: ScoreRequest):
 
     start = time.time()
     try:
-        result = compute_bqs(req.text)
+        result = compute_bqs(req.text, include_fact_check_score=not req.skip_fact_check)
         result["processing_time_ms"] = int((time.time() - start) * 1000)
 
         # Optionally include fact-check results
         fact_check_data = None
-        if req.include_fact_check:
+        if req.include_fact_check and not req.skip_fact_check:
             report = check_blog(req.text, archetype=result.get("archetype", "Unknown"))
             fact_check_data = report.to_dict()
             # Override stat_accuracy with combined score when agents are active
