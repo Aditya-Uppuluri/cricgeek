@@ -2,12 +2,12 @@ import Link from "next/link";
 import { Zap, Calendar, PenSquare, TrendingUp, ArrowRight, Trophy, BrainCircuit } from "lucide-react";
 import LiveMatchCard from "@/components/matches/LiveMatchCard";
 import AdSlot from "@/components/ads/AdSlot";
-import { getLiveMatches } from "@/lib/cricket-api";
+import { getMatchHubMatches } from "@/lib/cricket-api";
 
 export const revalidate = 30;
 
 export default async function HomePage() {
-  const matches = await getLiveMatches();
+  const matches = await getMatchHubMatches();
   const liveMatches = matches.filter((m) => m.matchStarted && !m.matchEnded);
   const recentMatches = matches.filter((m) => m.matchEnded).slice(0, 2);
   const upcomingMatches = matches.filter((m) => !m.matchStarted).slice(0, 2);

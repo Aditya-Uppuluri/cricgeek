@@ -8,8 +8,7 @@ import FormatFilter from "@/components/matches/FormatFilter";
 import AdSlot from "@/components/ads/AdSlot";
 import LiveScoresTicker from "@/components/matches/LiveScoresTicker";
 
-const FORMATS = ["All", "T20", "T20I", "ODI", "ODI-W", "Test", "FC"] as const;
-type Format = (typeof FORMATS)[number];
+type Format = "All" | "T20" | "T20I" | "ODI" | "ODI-W" | "Test" | "FC";
 
 interface MatchesClientProps {
   initialMatches: Match[];
@@ -25,12 +24,10 @@ export default function MatchesClient({ initialMatches, source }: MatchesClientP
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const res = await fetch("/api/livescores", { cache: "no-store" });
+      const res = await fetch("/api/matches", { cache: "no-store" });
       const json = await res.json();
-      if (json.matches?.length > 0) {
-        setMatches(json.matches);
-        setLastUpdated(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }));
-      }
+      setMatches(Array.isArray(json.matches) ? json.matches : []);
+      setLastUpdated(new Date().toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata" }));
     } finally {
       setRefreshing(false);
     }
@@ -63,7 +60,7 @@ export default function MatchesClient({ initialMatches, source }: MatchesClientP
           <div>
             <h1 className="text-3xl font-black text-white flex items-center gap-3">
               <Zap className="text-cg-green" />
-              Live Scores
+              Matches & Results
             </h1>
             <p className="text-gray-400 text-sm mt-1">
               {source === "sportmonks"

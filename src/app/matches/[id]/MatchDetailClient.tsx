@@ -411,7 +411,7 @@ export default function MatchDetailClient({
   source = "none",
 }: MatchDetailClientProps) {
   const [activeTab, setActiveTab] = useState<Tab>(
-    initialTab === "scorecard" && match.matchStarted ? "live" : initialTab
+    initialTab === "scorecard" && match.matchStarted && !match.matchEnded ? "live" : initialTab
   );
   const [liveMatch, setLiveMatch] = useState(match);
   const [liveScorecard, setLiveScorecard] = useState(scorecard);

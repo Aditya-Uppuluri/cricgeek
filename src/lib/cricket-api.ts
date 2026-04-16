@@ -1,5 +1,7 @@
 import { Match, Scorecard, Squad, CalendarMatch, Commentary } from "@/types/cricket";
 import {
+  getSMUpcoming,
+  getSMRecentResults,
   getSMCalendarFixtures,
   getSMCommentary,
   getSMFixture,
@@ -96,6 +98,53 @@ async function getLegacyUpcomingMatches(): Promise<CalendarMatch[] | null> {
   return fetchApi<CalendarMatch[]>("matches", { offset: "0" });
 }
 
+function calendarMatchToMatch(match: CalendarMatch): Match {
+  return {
+    id: match.id,
+    name: match.name,
+    matchType: match.matchType,
+    status: match.status,
+    venue: match.venue,
+    date: match.date,
+    dateTimeGMT: match.dateTimeGMT,
+    teams: match.teams,
+    teamInfo: match.teamInfo,
+    score: match.score ?? [],
+    series_id: match.series_id,
+    matchStarted: match.matchStarted ?? false,
+    matchEnded: match.matchEnded ?? false,
+  };
+}
+
+function dedupeMatches(...lists: Array<Match[] | null | undefined>): Match[] {
+  const unique = new Map<string, Match>();
+
+  for (const list of lists) {
+    for (const match of list ?? []) {
+      if (!unique.has(match.id)) {
+        unique.set(match.id, match);
+      }
+    }
+  }
+
+  return [...unique.values()];
+}
+
+function sortHubMatches(matches: Match[]): Match[] {
+  return [...matches].sort((left, right) => {
+    const leftBucket = left.matchStarted && !left.matchEnded ? 0 : !left.matchStarted ? 1 : 2;
+    const rightBucket = right.matchStarted && !right.matchEnded ? 0 : !right.matchStarted ? 1 : 2;
+
+    if (leftBucket !== rightBucket) return leftBucket - rightBucket;
+
+    if (leftBucket === 2) {
+      return right.dateTimeGMT.localeCompare(left.dateTimeGMT);
+    }
+
+    return left.dateTimeGMT.localeCompare(right.dateTimeGMT);
+  });
+}
+
 // Get current/live matches
 export async function getLiveMatches(): Promise<Match[]> {
   const { matches } = await getLiveMatchesWithSource();
@@ -118,6 +167,49 @@ export async function getLiveMatchesWithSource(): Promise<{
 
   if (shouldUseMocks()) {
     return { matches: getMockLiveMatches(), source: "mock" };
+  }
+
+  return { matches: [], source: "none" };
+}
+
+export async function getMatchHubMatches(): Promise<Match[]> {
+  const { matches } = await getMatchHubMatchesWithSource();
+  return matches;
+}
+
+export async function getMatchHubMatchesWithSource(): Promise<{
+  matches: Match[];
+  source: CricketDataSource;
+}> {
+  const [sportMonksLive, sportMonksUpcoming, sportMonksRecent] = await Promise.all([
+    getSMLivescores(),
+    getSMUpcoming(),
+    getSMRecentResults(),
+  ]);
+
+  if (sportMonksLive !== null || sportMonksUpcoming !== null || sportMonksRecent !== null) {
+    return {
+      matches: sortHubMatches(dedupeMatches(sportMonksLive, sportMonksUpcoming, sportMonksRecent)),
+      source: "sportmonks",
+    };
+  }
+
+  const [legacyLive, legacyUpcoming] = await Promise.all([
+    getLegacyLiveMatches(),
+    getLegacyUpcomingMatches(),
+  ]);
+
+  if (legacyLive !== null || legacyUpcoming !== null) {
+    return {
+      matches: sortHubMatches(
+        dedupeMatches(legacyLive, legacyUpcoming?.map(calendarMatchToMatch))
+      ),
+      source: "none",
+    };
+  }
+
+  if (shouldUseMocks()) {
+    return { matches: sortHubMatches(getMockLiveMatches()), source: "mock" };
   }
 
   return { matches: [], source: "none" };
@@ -205,7 +297,28 @@ export async function getUpcomingMatchesWithSource(): Promise<{
   matches: CalendarMatch[];
   source: CricketDataSource;
 }> {
-  const sportMonksMatches = await getSMCalendarFixtures();
+  const sportMonksMatches = await getSMCalendarFixtures({ daysBack: 0, daysAhead: 45 });
+  if (sportMonksMatches !== null) {
+    return { matches: sportMonksMatches, source: "sportmonks" };
+  }
+
+  const legacyMatches = await getLegacyUpcomingMatches();
+  if (legacyMatches !== null) {
+    return { matches: legacyMatches, source: "none" };
+  }
+
+  if (shouldUseMocks()) {
+    return { matches: getMockCalendarMatches(), source: "mock" };
+  }
+
+  return { matches: [], source: "none" };
+}
+
+export async function getCalendarMatchesWithSource(): Promise<{
+  matches: CalendarMatch[];
+  source: CricketDataSource;
+}> {
+  const sportMonksMatches = await getSMCalendarFixtures({ daysBack: 30, daysAhead: 45 });
   if (sportMonksMatches !== null) {
     return { matches: sportMonksMatches, source: "sportmonks" };
   }

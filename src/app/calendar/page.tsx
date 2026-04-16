@@ -1,17 +1,17 @@
 import { prisma } from "@/lib/db";
-import { getUpcomingMatchesWithSource } from "@/lib/cricket-api";
+import { getCalendarMatchesWithSource } from "@/lib/cricket-api";
 import CalendarClient from "./CalendarClient";
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
   title: "Cricket Calendar | CricGeek",
-  description: "Complete cricket match calendar. Never miss a match — World Cup, IPL, and all international fixtures.",
+  description: "Complete cricket match calendar with upcoming fixtures, live games, and recent results across World Cup, IPL, and international cricket.",
 };
 
 export const dynamic = "force-dynamic";
 
 export default async function CalendarPage() {
-  const { matches, source } = await getUpcomingMatchesWithSource();
+  const { matches, source } = await getCalendarMatchesWithSource();
   const matchIds = matches.map((match) => match.id).filter(Boolean);
 
   const [commentarySessions, blogs] = await Promise.all([

@@ -293,9 +293,12 @@ function toCalendarMatch(match: Match): CalendarMatch {
     dateTimeGMT: match.dateTimeGMT,
     teams: match.teams,
     teamInfo: match.teamInfo,
+    score: match.score,
     venue: match.venue,
     status: match.status,
     series_id: match.series_id,
+    matchStarted: match.matchStarted,
+    matchEnded: match.matchEnded,
   };
 }
 
@@ -323,6 +326,14 @@ const DETAIL_INCLUDES = `${INCLUDES}`;
 const SQUAD_INCLUDES = "localteam,visitorteam,lineup";
 const SCORECARD_INCLUDES = "localteam,visitorteam,runs,batting,bowling,lineup,scoreboards";
 const COMMENTARY_INCLUDES = "balls";
+
+interface SMFixtureWindowOptions {
+  daysBack?: number;
+  daysAhead?: number;
+  maxPages?: number;
+  perPage?: number;
+  revalidateSeconds?: number;
+}
 
 /**
  * Fetch all live fixtures from SportMonks.
@@ -850,36 +861,17 @@ export async function getSMSquads(id: string, options: SportMonksRequestOptions 
   }));
 }
 
-/**
- * Fetch upcoming fixtures (next 7 days).
- */
-export async function getSMUpcoming(): Promise<Match[] | null> {
-  const now = new Date();
-  const future = new Date(now);
-  future.setDate(now.getDate() + 7);
-
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
-
-  const data = await smFetch<SMFixture[]>("/fixtures", {
-    include: INCLUDES,
-    "filter[starts_between]": `${fmt(now)},${fmt(future)}`,
-  }, { revalidateSeconds: 300 });
-
-  if (!data) return null;
-  return data
-    .map(normaliseFixture)
-    .filter((m) => !m.matchStarted)
-    .sort((a, b) => a.dateTimeGMT.localeCompare(b.dateTimeGMT))
-    .slice(0, 20);
-}
-
-export async function getSMCalendarFixtures(
+async function getSMFixturesWindow({
+  daysBack = 0,
   daysAhead = 45,
   maxPages = 4,
-  perPage = 100
-): Promise<CalendarMatch[] | null> {
+  perPage = 100,
+  revalidateSeconds = 600,
+}: SMFixtureWindowOptions = {}): Promise<Match[] | null> {
   const now = new Date();
+  const past = new Date(now);
   const future = new Date(now);
+  past.setDate(now.getDate() - daysBack);
   future.setDate(now.getDate() + daysAhead);
 
   const fmt = (d: Date) => d.toISOString().split("T")[0];
@@ -890,16 +882,16 @@ export async function getSMCalendarFixtures(
       "/fixtures",
       {
         include: INCLUDES,
-        "filter[starts_between]": `${fmt(now)},${fmt(future)}`,
+        "filter[starts_between]": `${fmt(past)},${fmt(future)}`,
         per_page: String(perPage),
         page: String(page),
         sort: "starting_at",
       },
-      { revalidateSeconds: 600 }
+      { revalidateSeconds }
     );
 
     if (!data) {
-      return page === 1 ? null : fixtures.map(toCalendarMatch);
+      return page === 1 ? null : fixtures;
     }
 
     if (data.length === 0) {
@@ -913,28 +905,67 @@ export async function getSMCalendarFixtures(
     }
   }
 
-  const deduped = [...new Map(fixtures.map((fixture) => [fixture.id, fixture])).values()];
-
-  return deduped
-    .sort((left, right) => left.dateTimeGMT.localeCompare(right.dateTimeGMT))
-    .map(toCalendarMatch);
+  return [...new Map(fixtures.map((fixture) => [fixture.id, fixture])).values()].sort((left, right) =>
+    left.dateTimeGMT.localeCompare(right.dateTimeGMT)
+  );
 }
 
-export async function getSMRecentResults(): Promise<Match[] | null> {
-  const now = new Date();
-  const past = new Date(now);
-  past.setDate(now.getDate() - 3);
+/**
+ * Fetch upcoming fixtures (next 7 days).
+ */
+export async function getSMUpcoming({
+  daysAhead = 7,
+  maxPages = 2,
+  perPage = 100,
+}: Pick<SMFixtureWindowOptions, "daysAhead" | "maxPages" | "perPage"> = {}): Promise<Match[] | null> {
+  const fixtures = await getSMFixturesWindow({
+    daysBack: 0,
+    daysAhead,
+    maxPages,
+    perPage,
+    revalidateSeconds: 300,
+  });
 
-  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  if (!fixtures) return null;
+  return fixtures
+    .filter((m) => !m.matchStarted)
+    .sort((a, b) => a.dateTimeGMT.localeCompare(b.dateTimeGMT))
+    .slice(0, 20);
+}
 
-  const data = await smFetch<SMFixture[]>("/fixtures", {
-    include: INCLUDES,
-    "filter[starts_between]": `${fmt(past)},${fmt(now)}`,
-  }, { revalidateSeconds: 120 });
+export async function getSMCalendarFixtures({
+  daysBack = 30,
+  daysAhead = 45,
+  maxPages = 4,
+  perPage = 100,
+}: SMFixtureWindowOptions = {}): Promise<CalendarMatch[] | null> {
+  const fixtures = await getSMFixturesWindow({
+    daysBack,
+    daysAhead,
+    maxPages,
+    perPage,
+    revalidateSeconds: 600,
+  });
 
-  if (!data) return null;
-  return data
-    .map(normaliseFixture)
+  if (!fixtures) return null;
+  return fixtures.map(toCalendarMatch);
+}
+
+export async function getSMRecentResults({
+  daysBack = 30,
+  maxPages = 4,
+  perPage = 100,
+}: Pick<SMFixtureWindowOptions, "daysBack" | "maxPages" | "perPage"> = {}): Promise<Match[] | null> {
+  const fixtures = await getSMFixturesWindow({
+    daysBack,
+    daysAhead: 0,
+    maxPages,
+    perPage,
+    revalidateSeconds: 180,
+  });
+
+  if (!fixtures) return null;
+  return fixtures
     .filter((m) => m.matchEnded)
     .sort((a, b) => b.dateTimeGMT.localeCompare(a.dateTimeGMT))
     .slice(0, 20);
@@ -961,8 +992,8 @@ export async function getSMTeamRostersForHints(
 
   const [live, upcoming, recent] = await Promise.all([
     getSMLivescores(),
-    getSMUpcoming(),
-    getSMRecentResults(),
+    getSMUpcoming({ daysAhead: 14, maxPages: 2 }),
+    getSMRecentResults({ daysBack: 7, maxPages: 2 }),
   ]);
 
   const fixtures = [...(live ?? []), ...(upcoming ?? []), ...(recent ?? [])];

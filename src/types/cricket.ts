@@ -125,9 +125,12 @@ export interface CalendarMatch {
   dateTimeGMT: string;
   teams: string[];
   teamInfo: TeamInfo[];
+  score?: Score[];
   venue: string;
   status: string;
   series_id?: string;
+  matchStarted?: boolean;
+  matchEnded?: boolean;
 }
 
 export interface MatchAnalysis {
