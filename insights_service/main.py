@@ -22,6 +22,7 @@ def _resolve_root_dir() -> Path:
 ROOT_DIR = _resolve_root_dir()
 try:
     from insights_service.t20_insights import (
+        CAPSTONE_OUTPUTS_DIR,
         T20InsightsUnavailable,
         get_evaluation as get_t20_evaluation,
         get_manual_advisor as get_t20_manual_advisor,
@@ -31,6 +32,7 @@ try:
     )
 except ModuleNotFoundError:
     from t20_insights import (
+        CAPSTONE_OUTPUTS_DIR,
         T20InsightsUnavailable,
         get_evaluation as get_t20_evaluation,
         get_manual_advisor as get_t20_manual_advisor,
@@ -87,7 +89,7 @@ class T20AdvisorRequest(BaseModel):
 
 
 def _artifact_health() -> tuple[bool, dict[str, object]]:
-    outputs_dir = ROOT_DIR / "capstone cric" / "outputs"
+    outputs_dir = CAPSTONE_OUTPUTS_DIR
     files: dict[str, object] = {}
     missing: list[str] = []
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import pickle
 import sys
 import threading
@@ -15,18 +16,56 @@ import pandas as pd
 THIS_DIR = Path(__file__).resolve().parent
 
 
-def _resolve_base_dir() -> Path:
-    candidates = (THIS_DIR.parent, THIS_DIR)
-    for candidate in candidates:
-        if (candidate / "capstone cric").exists():
-            return candidate
-    return THIS_DIR.parent
+def _candidate_roots() -> list[Path]:
+    raw_candidates = [
+        Path.cwd(),
+        THIS_DIR,
+        THIS_DIR.parent,
+        Path(os.environ["PWD"]) if os.environ.get("PWD") else None,
+        Path(os.environ["LAMBDA_TASK_ROOT"]) if os.environ.get("LAMBDA_TASK_ROOT") else None,
+        Path("/var/task"),
+        Path("/var/task/user"),
+    ]
+
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for candidate in raw_candidates:
+        if candidate is None:
+            continue
+        resolved = candidate.resolve()
+        key = str(resolved)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(resolved)
+
+    return candidates
 
 
-BASE_DIR = _resolve_base_dir()
-CAPSTONE_DIR = BASE_DIR / "capstone cric"
+def _resolve_capstone_paths() -> tuple[Path, Path]:
+    for root in _candidate_roots():
+        outputs_dir = root / "capstone cric" / "outputs"
+        if outputs_dir.exists():
+            return outputs_dir.parent, outputs_dir
+
+    for root in _candidate_roots():
+        if not root.exists():
+            continue
+        try:
+            match = next(root.rglob("aggregated_df.pkl"))
+        except (OSError, StopIteration):
+            continue
+
+        outputs_dir = match.parent
+        if outputs_dir.name == "outputs":
+            return outputs_dir.parent, outputs_dir
+
+    fallback_capstone = (Path.cwd() / "capstone cric").resolve()
+    return fallback_capstone, fallback_capstone / "outputs"
+
+
+CAPSTONE_DIR, CAPSTONE_OUTPUTS_DIR = _resolve_capstone_paths()
 CAPSTONE_SRC_DIR = CAPSTONE_DIR / "src"
-CAPSTONE_OUTPUTS_DIR = CAPSTONE_DIR / "outputs"
 
 for path in (CAPSTONE_DIR, CAPSTONE_SRC_DIR):
     if str(path) not in sys.path:
