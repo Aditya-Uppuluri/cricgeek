@@ -14,18 +14,9 @@
       "maxDuration": 120,
       "includeFiles": [
         "insights_service/t20_insights.py",
-        "capstone cric/cricket_metrics.py",
-        "capstone cric/evaluator.py",
-        "capstone cric/outputs/aggregated_df.pkl",
-        "capstone cric/outputs/bowling_over_df.pkl",
-        "capstone cric/outputs/entries_with_perf.pkl",
-        "capstone cric/outputs/eval_results.pkl",
-        "capstone cric/outputs/filtered_df.pkl",
-        "capstone cric/outputs/player_gender_map.pkl",
-        "capstone cric/outputs/player_image_urls.json",
-        "capstone cric/outputs/player_team_map.json",
-        "capstone cric/outputs/team_players_map.json",
-        "capstone cric/outputs/teams_list.pkl"
+        "insights_service/cricket_metrics.py",
+        "insights_service/evaluator.py",
+        "insights_service/outputs/**"
       ]
     }
   }

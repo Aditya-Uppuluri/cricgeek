@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 
 THIS_DIR = Path(__file__).resolve().parent
+LOCAL_OUTPUTS_DIR = THIS_DIR / "outputs"
 
 
 def _candidate_roots() -> list[Path]:
@@ -43,6 +44,9 @@ def _candidate_roots() -> list[Path]:
 
 
 def _resolve_capstone_paths() -> tuple[Path, Path]:
+    if LOCAL_OUTPUTS_DIR.exists():
+        return THIS_DIR, LOCAL_OUTPUTS_DIR
+
     for root in _candidate_roots():
         outputs_dir = root / "capstone cric" / "outputs"
         if outputs_dir.exists():
@@ -67,7 +71,7 @@ def _resolve_capstone_paths() -> tuple[Path, Path]:
 CAPSTONE_DIR, CAPSTONE_OUTPUTS_DIR = _resolve_capstone_paths()
 CAPSTONE_SRC_DIR = CAPSTONE_DIR / "src"
 
-for path in (CAPSTONE_DIR, CAPSTONE_SRC_DIR):
+for path in (THIS_DIR, CAPSTONE_DIR, CAPSTONE_SRC_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
