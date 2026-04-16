@@ -13,8 +13,7 @@
       "memory": 2048,
       "maxDuration": 120,
       "includeFiles": [
-        "ai_service/t20_api.py",
-        "ai_service/t20_insights.py",
+        "insights_service/t20_insights.py",
         "capstone cric/cricket_metrics.py",
         "capstone cric/evaluator.py",
         "capstone cric/outputs/aggregated_df.pkl",
