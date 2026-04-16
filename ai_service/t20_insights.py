@@ -12,7 +12,18 @@ from typing import Any, Optional
 import numpy as np
 import pandas as pd
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+THIS_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_base_dir() -> Path:
+    candidates = (THIS_DIR.parent, THIS_DIR)
+    for candidate in candidates:
+        if (candidate / "capstone cric").exists():
+            return candidate
+    return THIS_DIR.parent
+
+
+BASE_DIR = _resolve_base_dir()
 CAPSTONE_DIR = BASE_DIR / "capstone cric"
 CAPSTONE_SRC_DIR = CAPSTONE_DIR / "src"
 CAPSTONE_OUTPUTS_DIR = CAPSTONE_DIR / "outputs"

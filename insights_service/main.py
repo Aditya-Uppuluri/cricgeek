@@ -6,15 +6,30 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-ROOT_DIR = Path(__file__).resolve().parent.parent
+THIS_DIR = Path(__file__).resolve().parent
+
+
+def _resolve_root_dir() -> Path:
+    candidates = (THIS_DIR.parent, THIS_DIR)
+    for candidate in candidates:
+        if (candidate / "ai_service").exists() or (candidate / "capstone cric").exists():
+            return candidate
+    return THIS_DIR.parent
+
+
+ROOT_DIR = _resolve_root_dir()
 AI_SERVICE_DIR = ROOT_DIR / "ai_service"
 
 for path in (ROOT_DIR, AI_SERVICE_DIR):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from ai_service.t20_api import router as t20_router
-from ai_service.t20_insights import T20InsightsUnavailable, get_metadata
+try:
+    from ai_service.t20_api import router as t20_router
+    from ai_service.t20_insights import T20InsightsUnavailable, get_metadata
+except ModuleNotFoundError:
+    from t20_api import router as t20_router
+    from t20_insights import T20InsightsUnavailable, get_metadata
 
 REQUIRED_ARTIFACTS = (
     "aggregated_df.pkl",
