@@ -54,3 +54,9 @@ async def health() -> dict[str, object]:
             "service": "t20-insights",
             "error": str(exc),
         }
+    except Exception as exc:
+        return {
+            "status": "degraded",
+            "service": "t20-insights",
+            "error": f"Unexpected insights health error: {exc}",
+        }

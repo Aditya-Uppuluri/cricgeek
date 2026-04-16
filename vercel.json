@@ -21,6 +21,7 @@
         "capstone cric/outputs/bowling_over_df.pkl",
         "capstone cric/outputs/entries_with_perf.pkl",
         "capstone cric/outputs/eval_results.pkl",
+        "capstone cric/outputs/filtered_df.pkl",
         "capstone cric/outputs/player_gender_map.pkl",
         "capstone cric/outputs/player_image_urls.json",
         "capstone cric/outputs/player_team_map.json",
