@@ -16,6 +16,19 @@ for path in (ROOT_DIR, AI_SERVICE_DIR):
 from ai_service.t20_api import router as t20_router
 from ai_service.t20_insights import T20InsightsUnavailable, get_metadata
 
+REQUIRED_ARTIFACTS = (
+    "aggregated_df.pkl",
+    "bowling_over_df.pkl",
+    "entries_with_perf.pkl",
+    "eval_results.pkl",
+    "filtered_df.pkl",
+    "player_gender_map.pkl",
+    "player_image_urls.json",
+    "player_team_map.json",
+    "team_players_map.json",
+    "teams_list.pkl",
+)
+
 app = FastAPI(
     title="CricGeek T20 Insights Service",
     description="Lightweight deployed service for capstone T20 advisor, evaluation, and player explorer routes.",
@@ -37,8 +50,44 @@ app.add_middleware(
 app.include_router(t20_router)
 
 
+def _artifact_health() -> tuple[bool, dict[str, object]]:
+    outputs_dir = ROOT_DIR / "capstone cric" / "outputs"
+    files: dict[str, object] = {}
+    missing: list[str] = []
+
+    for filename in REQUIRED_ARTIFACTS:
+        path = outputs_dir / filename
+        exists = path.exists()
+        if not exists:
+            missing.append(filename)
+            files[filename] = {"exists": False}
+            continue
+
+        files[filename] = {
+            "exists": True,
+            "sizeBytes": path.stat().st_size,
+        }
+
+    return len(missing) == 0, {
+        "directory": str(outputs_dir),
+        "missing": missing,
+        "files": files,
+    }
+
+
 @app.get("/health")
 async def health() -> dict[str, object]:
+    artifacts_ok, artifact_report = _artifact_health()
+
+    return {
+        "status": "ok" if artifacts_ok else "degraded",
+        "service": "t20-insights",
+        "artifacts": artifact_report,
+    }
+
+
+@app.get("/health/deep")
+async def health_deep() -> dict[str, object]:
     try:
         metadata = get_metadata()
         return {
