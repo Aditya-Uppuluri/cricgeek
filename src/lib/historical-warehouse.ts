@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash } from "crypto";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 
