@@ -82,22 +82,26 @@ export async function GET(request: Request) {
     }
 
     const state = deriveLiveState(match);
-    const upstream = await forwardInsightsService("/t20-insights/advisor", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        runs: state.runs,
-        wickets: state.wickets,
-        overs: state.overs,
-        innings: state.innings,
-        target: state.target,
-        batting_team: state.battingTeam,
-        bowling_team: state.bowlingTeam,
-        match_gender: state.matchGender,
-        strategy,
-        top_n: Number.isFinite(topN) ? topN : 5,
-      }),
-    });
+    const upstream = await forwardInsightsService(
+      "/t20-insights/advisor",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          runs: state.runs,
+          wickets: state.wickets,
+          overs: state.overs,
+          innings: state.innings,
+          target: state.target,
+          batting_team: state.battingTeam,
+          bowling_team: state.bowlingTeam,
+          match_gender: state.matchGender,
+          strategy,
+          top_n: Number.isFinite(topN) ? topN : 5,
+        }),
+      },
+      request
+    );
 
     if (!upstream.ok) {
       return new NextResponse(upstream.body, {

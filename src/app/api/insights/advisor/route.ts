@@ -7,11 +7,15 @@ export const maxDuration = 120;
 export async function POST(request: NextRequest) {
   try {
     const body = await request.text();
-    const upstream = await forwardInsightsService("/t20-insights/advisor", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
+    const upstream = await forwardInsightsService(
+      "/t20-insights/advisor",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body,
+      },
+      request
+    );
 
     return new NextResponse(upstream.body, {
       status: upstream.status,

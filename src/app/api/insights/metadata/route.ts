@@ -8,7 +8,9 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const query = url.searchParams.toString();
     const upstream = await forwardInsightsService(
-      `/t20-insights/meta${query ? `?${query}` : ""}`
+      `/t20-insights/meta${query ? `?${query}` : ""}`,
+      undefined,
+      request
     );
 
     return new NextResponse(upstream.body, {

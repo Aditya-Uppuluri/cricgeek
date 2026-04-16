@@ -32,6 +32,25 @@ type ForwardResult = {
   status: number;
 };
 
+function buildForwardHeaders(
+  init?: RequestInit,
+  incomingRequest?: Request
+): Headers {
+  const headers = new Headers(init?.headers);
+  const incomingCookie = incomingRequest?.headers.get("cookie");
+
+  if (incomingCookie && !headers.has("cookie")) {
+    headers.set("cookie", incomingCookie);
+  }
+
+  const protectionBypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+  if (protectionBypassSecret && !headers.has("x-vercel-protection-bypass")) {
+    headers.set("x-vercel-protection-bypass", protectionBypassSecret);
+  }
+
+  return headers;
+}
+
 function assertAiServiceAvailable() {
   const hasConfiguredProductionService = Boolean(
     process.env.INSIGHTS_URL ||
@@ -62,11 +81,16 @@ function assertInsightsServiceAvailable() {
   }
 }
 
-export async function forwardAiService(path: string, init?: RequestInit): Promise<ForwardResult> {
+export async function forwardAiService(
+  path: string,
+  init?: RequestInit,
+  incomingRequest?: Request
+): Promise<ForwardResult> {
   assertAiServiceAvailable();
 
   const response = await fetch(`${AI_SERVICE_URL}${path}`, {
     ...init,
+    headers: buildForwardHeaders(init, incomingRequest),
     cache: "no-store",
   });
 
@@ -80,12 +104,14 @@ export async function forwardAiService(path: string, init?: RequestInit): Promis
 
 export async function forwardInsightsService(
   path: string,
-  init?: RequestInit
+  init?: RequestInit,
+  incomingRequest?: Request
 ): Promise<ForwardResult> {
   assertInsightsServiceAvailable();
 
   const response = await fetch(`${INSIGHTS_SERVICE_URL}${path}`, {
     ...init,
+    headers: buildForwardHeaders(init, incomingRequest),
     cache: "no-store",
   });
 

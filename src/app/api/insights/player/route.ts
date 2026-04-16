@@ -13,7 +13,9 @@ export async function GET(request: Request) {
     }
 
     const upstream = await forwardInsightsService(
-      `/t20-insights/player?name=${encodeURIComponent(name)}`
+      `/t20-insights/player?name=${encodeURIComponent(name)}`,
+      undefined,
+      request
     );
 
     return new NextResponse(upstream.body, {
