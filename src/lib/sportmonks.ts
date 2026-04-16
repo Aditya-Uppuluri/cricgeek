@@ -14,7 +14,7 @@
  * doesn't need any changes.
  */
 
-import { BattingEntry, BowlingEntry, Commentary, Match, Player, Score, Scorecard, Squad, TeamInfo } from "@/types/cricket";
+import { BattingEntry, BowlingEntry, CalendarMatch, Commentary, Match, Player, Score, Scorecard, Squad, TeamInfo } from "@/types/cricket";
 
 const BASE_URL =
   process.env.SPORTMONKS_BASE_URL ||
@@ -281,6 +281,21 @@ export function normaliseFixture(f: SMFixture): Match {
     score,
     matchStarted,
     matchEnded,
+  };
+}
+
+function toCalendarMatch(match: Match): CalendarMatch {
+  return {
+    id: match.id,
+    name: match.name,
+    matchType: match.matchType,
+    date: match.date,
+    dateTimeGMT: match.dateTimeGMT,
+    teams: match.teams,
+    teamInfo: match.teamInfo,
+    venue: match.venue,
+    status: match.status,
+    series_id: match.series_id,
   };
 }
 
@@ -856,6 +871,53 @@ export async function getSMUpcoming(): Promise<Match[] | null> {
     .filter((m) => !m.matchStarted)
     .sort((a, b) => a.dateTimeGMT.localeCompare(b.dateTimeGMT))
     .slice(0, 20);
+}
+
+export async function getSMCalendarFixtures(
+  daysAhead = 45,
+  maxPages = 4,
+  perPage = 100
+): Promise<CalendarMatch[] | null> {
+  const now = new Date();
+  const future = new Date(now);
+  future.setDate(now.getDate() + daysAhead);
+
+  const fmt = (d: Date) => d.toISOString().split("T")[0];
+  const fixtures: Match[] = [];
+
+  for (let page = 1; page <= maxPages; page += 1) {
+    const data = await smFetch<SMFixture[]>(
+      "/fixtures",
+      {
+        include: INCLUDES,
+        "filter[starts_between]": `${fmt(now)},${fmt(future)}`,
+        per_page: String(perPage),
+        page: String(page),
+        sort: "starting_at",
+      },
+      { revalidateSeconds: 600 }
+    );
+
+    if (!data) {
+      return page === 1 ? null : fixtures.map(toCalendarMatch);
+    }
+
+    if (data.length === 0) {
+      break;
+    }
+
+    fixtures.push(...data.map(normaliseFixture));
+
+    if (data.length < perPage) {
+      break;
+    }
+  }
+
+  const deduped = [...new Map(fixtures.map((fixture) => [fixture.id, fixture])).values()];
+
+  return deduped
+    .sort((left, right) => left.dateTimeGMT.localeCompare(right.dateTimeGMT))
+    .map(toCalendarMatch);
 }
 
 export async function getSMRecentResults(): Promise<Match[] | null> {

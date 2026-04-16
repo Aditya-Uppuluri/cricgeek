@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/db";
-import { getUpcomingMatches } from "@/lib/cricket-api";
+import { getUpcomingMatchesWithSource } from "@/lib/cricket-api";
 import CalendarClient from "./CalendarClient";
 import type { Metadata } from "next";
 
@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 export const dynamic = "force-dynamic";
 
 export default async function CalendarPage() {
-  const matches = await getUpcomingMatches();
+  const { matches, source } = await getUpcomingMatchesWithSource();
   const matchIds = matches.map((match) => match.id).filter(Boolean);
 
   const [commentarySessions, blogs] = await Promise.all([
@@ -74,5 +74,5 @@ export default async function CalendarPage() {
     blogs: blogsByMatchId.get(match.id) ?? [],
   }));
 
-  return <CalendarClient matches={JSON.parse(JSON.stringify(enrichedMatches))} />;
+  return <CalendarClient matches={JSON.parse(JSON.stringify(enrichedMatches))} source={source} />;
 }

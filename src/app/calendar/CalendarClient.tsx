@@ -33,9 +33,10 @@ interface CalendarMatchWithLinks extends CalendarMatch {
 
 interface CalendarClientProps {
   matches: CalendarMatchWithLinks[];
+  source: "sportmonks" | "mock" | "none";
 }
 
-export default function CalendarClient({ matches }: CalendarClientProps) {
+export default function CalendarClient({ matches, source }: CalendarClientProps) {
   const today = new Date().toISOString().split("T")[0];
   const [currentDate, setCurrentDate] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(
@@ -110,7 +111,11 @@ export default function CalendarClient({ matches }: CalendarClientProps) {
         <div className="mb-8 rounded-2xl border border-amber-500/20 bg-amber-500/10 p-5">
           <p className="text-sm font-semibold text-amber-300">No calendar matches available right now.</p>
           <p className="mt-1 text-sm text-amber-200/80">
-            The live cricket API did not return fixtures for this request. If your API quota is exhausted, the calendar will stay empty until the limit resets.
+            {source === "sportmonks"
+              ? "SportMonks returned no fixtures for the current calendar window. This usually means there are no scheduled fixtures in the requested range or the API quota has been exhausted."
+              : source === "mock"
+                ? "Live fixture providers are not configured on this environment, so CricGeek is waiting on mock calendar data."
+                : "The configured cricket fixture provider did not return any matches for this request."}
           </p>
         </div>
       )}
