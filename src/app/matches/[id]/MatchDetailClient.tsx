@@ -10,6 +10,7 @@ import CommentaryFeed from "@/components/matches/CommentaryFeed";
 import SquadList from "@/components/matches/SquadList";
 import MatchLiveCommentary from "@/components/matches/MatchLiveCommentary";
 import LiveEdaPanel from "@/components/matches/LiveEdaPanel";
+import LiveRecommendationBubble from "@/components/matches/LiveRecommendationBubble";
 import AdSlot from "@/components/ads/AdSlot";
 import CricketNewsSidebar from "@/components/news/CricketNewsSidebar";
 import { cn } from "@/lib/utils";
@@ -771,6 +772,14 @@ export default function MatchDetailClient({
             <LiveEdaPanel
               matchId={liveMatch.id}
               enabled={isLive}
+            />
+          )}
+          {activeTab === "live" && isLive && (
+            <LiveRecommendationBubble
+              matchId={liveMatch.id}
+              matchType={liveMatch.matchType}
+              enabled={isLive}
+              className="mt-4"
             />
           )}
           {activeTab === "live" && (

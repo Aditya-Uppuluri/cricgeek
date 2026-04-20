@@ -58,12 +58,87 @@ function deriveLiveState(match: Match) {
   };
 }
 
+// ── Squad filtering helpers ──────────────────────────────────────────────
+
+function normaliseForMatch(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z\s]/g, "")
+    .trim();
+}
+
+/**
+ * Returns true if the candidate player name (from the advisor) is present
+ * in the allowed squad list.  Uses a lenient substring match because player
+ * names may differ slightly between the insights model (Cricsheet) and
+ * SportsMonks (e.g. "V Kohli" vs "Virat Kohli").
+ */
+function inSquad(playerName: string, squad: string[]): boolean {
+  if (squad.length === 0) return true; // no filter applied
+  const normCandidate = normaliseForMatch(playerName);
+  for (const squadName of squad) {
+    const normSquad = normaliseForMatch(squadName);
+    // Match if either string contains the other (handles short vs full names)
+    if (normSquad.includes(normCandidate) || normCandidate.includes(normSquad)) {
+      return true;
+    }
+    // Substring match on last word (surname) as a fallback
+    const candidateSurname = normCandidate.split(" ").pop() ?? "";
+    const squadSurname = normSquad.split(" ").pop() ?? "";
+    if (candidateSurname.length > 3 && squadSurname === candidateSurname) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function applySquadFilter(
+  advisor: Record<string, unknown>,
+  squad: string[]
+): Record<string, unknown> {
+  if (squad.length === 0) return advisor;
+
+  const filterItems = (items: unknown): unknown[] => {
+    if (!Array.isArray(items)) return [];
+    return items.filter((item) => {
+      const rec = item as Record<string, unknown>;
+      const name =
+        String(rec.player ?? rec.name ?? rec.batter ?? rec.batsman ?? "");
+      return name ? inSquad(name, squad) : true;
+    });
+  };
+
+  return {
+    ...advisor,
+    // Filter the primary recommendation list (may be called 'recommendations', 'batters', etc.)
+    ...(Array.isArray(advisor.recommendations)
+      ? { recommendations: filterItems(advisor.recommendations) }
+      : {}),
+    ...(Array.isArray(advisor.batters)
+      ? { batters: filterItems(advisor.batters) }
+      : {}),
+    ...(Array.isArray(advisor.bowlers)
+      ? { bowlers: filterItems(advisor.bowlers) }
+      : {}),
+    ...(Array.isArray(advisor.players)
+      ? { players: filterItems(advisor.players) }
+      : {}),
+  };
+}
+
+// ── Route handler ─────────────────────────────────────────────────────────
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const matchId = url.searchParams.get("matchId");
     const strategy = url.searchParams.get("strategy") || "balanced";
     const topN = Number(url.searchParams.get("topN") || 5);
+    // squad = comma-separated player names from the live Playing XI
+    const squadParam = url.searchParams.get("squad") ?? "";
+    const squad = squadParam
+      ? squadParam.split(",").map((s) => s.trim()).filter(Boolean)
+      : [];
 
     if (!matchId) {
       return NextResponse.json({ error: "matchId is required" }, { status: 400 });
@@ -110,7 +185,8 @@ export async function GET(request: Request) {
       });
     }
 
-    const advisor = JSON.parse(upstream.body) as Record<string, unknown>;
+    const rawAdvisor = JSON.parse(upstream.body) as Record<string, unknown>;
+    const advisor = applySquadFilter(rawAdvisor, squad);
 
     return NextResponse.json({
       ...advisor,
@@ -122,6 +198,7 @@ export async function GET(request: Request) {
         matchType: match.matchType,
       },
       sourceContext: state,
+      squadFiltered: squad.length > 0,
     });
   } catch (error) {
     console.error("Insights live proxy error:", error);
