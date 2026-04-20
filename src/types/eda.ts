@@ -211,6 +211,26 @@ export interface LiveAnalyticsBundle {
   dotBallHeatmap: LiveHeatmapCell[];
   matchupMatrix: LiveMatchupCell[];
   boundaryPressure: LiveBoundaryPressureSummary | null;
+  /** DLS resource percentage remaining for the batting side */
+  resourcePct: number;
+  /** Entropy-weighted momentum score 0-100 (50 = neutral) */
+  entropyMomentum: number;
+  /** Probability (0-100) of 2+ wickets falling in the next 3 overs */
+  wicketCascadeRisk: number;
+  /** Death-over run forecast */
+  deathOverForecast: {
+    projectedDeathRuns: number;
+    confidence: number;
+  } | null;
+  /** Win probability details from the Bayesian engine */
+  winProbabilityDetail: {
+    probability: number;
+    ci95: [number, number];
+    resourcePct: number;
+    expectedRunsRemaining: number;
+    featureContributions: Record<string, number>;
+    priorSampleSize: number;
+  } | null;
 }
 
 export interface LiveEdaReport {

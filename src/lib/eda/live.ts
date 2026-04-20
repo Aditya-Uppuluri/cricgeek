@@ -11,6 +11,12 @@ import {
 } from "@/lib/eda/common";
 import { buildLiveAnalyticsBundle } from "@/lib/eda/live-analytics";
 import { getVenueSnapshot } from "@/lib/eda/historical";
+import {
+  computeBayesianWinProbability,
+  runProbabilityIndex,
+  globalT20Prior,
+  type WinProbabilityPrior,
+} from "@/lib/eda/win-probability";
 import type { Commentary, Match, Score, Scorecard } from "@/types/cricket";
 import type { InsightsAdvisorResponse } from "@/types/insights";
 import type { LiveEdaReport, LivePressureSnapshot } from "@/types/eda";
@@ -164,17 +170,138 @@ export async function buildLiveEdaReport(
     options.commentary !== undefined ? Promise.resolve(options.commentary) : getMatchCommentary(match.id, { fresh: options.fresh ?? true }),
     options.scorecards !== undefined ? Promise.resolve(options.scorecards) : getMatchScorecard(match.id, { fresh: options.fresh ?? true }),
   ]);
+
+  // Build win-probability prior from venue warehouse data
+  const winPrior: WinProbabilityPrior = {
+    priorWinPct: 52,
+    avgTarget: venue.avgFirstInningsScore,
+    chaseWinPct: venue.chaseWinPct,
+    sampleSize: venue.sampleSize,
+  };
   const analytics = buildLiveAnalyticsBundle({
     match,
     commentaryBalls: commentary?.bbb ?? [],
     scorecards,
     snapshot,
     venue,
+    winPrior: winPrior ?? undefined,
   });
   const topTurningBall = analytics.topTurningBalls[0];
   const boundaryPressure = analytics.boundaryPressure;
+  const wp = analytics.winProbabilityDetail;
+
+  // ── Run-Probability Index (RPI) ───────────────────────────────────────────
+  const rpi = runProbabilityIndex(
+    {
+      innings: snapshot.innings,
+      runs: snapshot.runs,
+      wickets: snapshot.wickets,
+      overs: snapshot.overs,
+      scheduledOvers: scheduledOvers ?? 20,
+      target: snapshot.target,
+      currentRunRate: snapshot.currentRunRate,
+      requiredRunRate: snapshot.requiredRunRate,
+      recentRunRate: null,
+      matchType: match.matchType,
+      phase: snapshot.phase,
+    },
+    venue.avgFirstInningsScore ?? 168
+  );
 
   const cards = [
+    // ── Card 1: Bayesian Win Probability ───────────────────────────────────
+    {
+      id: "win-probability",
+      label: "Win probability",
+      value: wp ? `${wp.probability}%` : "—",
+      subValue: wp ? `CI95: ${wp.ci95[0]}–${wp.ci95[1]}%` : undefined,
+      insight: wp
+        ? `${snapshot.battingTeam} have a ${wp.probability}% chance of winning (Bayesian model, ${wp.priorSampleSize} historical matches anchoring the prior). ` +
+          `Resources remaining: ${wp.resourcePct}%, expected ${wp.expectedRunsRemaining} more runs from this position. ` +
+          (Object.entries(wp.featureContributions).length > 0
+            ? `Key drivers: ${Object.entries(wp.featureContributions)
+                .sort(([, a], [, b]) => Math.abs(b) - Math.abs(a))
+                .slice(0, 3)
+                .map(([k, v]) => `${k.replace(/_/g, " ")} (${v > 0 ? "+" : ""}${v})`)
+                .join("; ")}.`
+            : "")
+        : "Win probability available once scoring begins.",
+      tone: wp
+        ? wp.probability >= 65 ? "good" as const
+        : wp.probability <= 35 ? "warning" as const
+        : "neutral" as const
+        : "neutral" as const,
+    },
+    // ── Card 2: DLS Resources ───────────────────────────────────────────────
+    {
+      id: "dls-resources",
+      label: "DLS resources remaining",
+      value: wp ? `${wp.resourcePct}%` : `${analytics.resourcePct}%`,
+      insight:
+        `${snapshot.battingTeam} have ${wp?.resourcePct ?? analytics.resourcePct}% of their batting resources left ` +
+        `(${Math.max(0, (scheduledOvers ?? 20) - snapshot.overs).toFixed(1)} overs, ${10 - snapshot.wickets} wickets). ` +
+        (wp ? `Expected ${wp.expectedRunsRemaining} more runs from this resource state.` : ""),
+      tone: (wp?.resourcePct ?? analytics.resourcePct) >= 50 ? "good" as const : "neutral" as const,
+    },
+    // ── Card 3: Run-Probability Index ─────────────────────────────────────────
+    {
+      id: "rpi",
+      label: "Run-probability index",
+      value: `${rpi}`,
+      insight:
+        rpi >= 60
+          ? `RPI ${rpi}/100 — ${snapshot.battingTeam} are tracking above par considering wickets, resources, and current tempo.`
+          : rpi <= 40
+            ? `RPI ${rpi}/100 — the fielding side holds the balance; a wicket or two could decide this match.`
+            : `RPI ${rpi}/100 — this match is evenly poised; small state changes will swing it decisively.`,
+      tone: rpi >= 60 ? "good" as const : rpi <= 40 ? "warning" as const : "neutral" as const,
+    },
+    // ── Card 4: Entropy Momentum ────────────────────────────────────────────────
+    {
+      id: "entropy-momentum",
+      label: "Batting momentum",
+      value: `${analytics.entropyMomentum}/100`,
+      insight:
+        analytics.entropyMomentum >= 60
+          ? `Decay-weighted batting momentum is strong (${analytics.entropyMomentum}/100) — recent scoring has been above phase baseline with volatile, boundary-heavy deliveries.`
+          : analytics.entropyMomentum <= 40
+            ? `Batting momentum is suppressed (${analytics.entropyMomentum}/100) — the bowling side is applying effective control through dot balls and low-value deliveries.`
+            : `Batting momentum is neutral (${analytics.entropyMomentum}/100) — neither side has established a clear tempo advantage in the last 4 overs.`,
+      tone: analytics.entropyMomentum >= 60 ? "good" as const : analytics.entropyMomentum <= 40 ? "warning" as const : "neutral" as const,
+    },
+    // ── Card 5: Wicket-Cascade Risk ────────────────────────────────────────────
+    {
+      id: "cascade-risk",
+      label: "Wicket-cascade risk",
+      value: `${analytics.wicketCascadeRisk}%`,
+      insight:
+        analytics.wicketCascadeRisk >= 40
+          ? `${analytics.wicketCascadeRisk}% probability of 2+ wickets in the next 3 overs — historical wicket-cluster patterns and recent dismissal rate suggest a mid-innings collapse is a live risk.`
+          : analytics.wicketCascadeRisk <= 15
+            ? `Low cascade risk (${analytics.wicketCascadeRisk}%) — scoring is fluid and dismissals have been spread across the innings so far.`
+            : `Moderate cascade risk (${analytics.wicketCascadeRisk}%) — the match could pivot quickly if a wicket falls in the next over.`,
+      tone: analytics.wicketCascadeRisk >= 40 ? "warning" as const : analytics.wicketCascadeRisk <= 15 ? "good" as const : "neutral" as const,
+    },
+    // ── Card 6: Death-Over Forecast ─────────────────────────────────────────────
+    analytics.deathOverForecast !== null
+      ? {
+          id: "death-forecast",
+          label: "Death-over forecast",
+          value: `+${analytics.deathOverForecast.projectedDeathRuns}`,
+          insight:
+            `Model projects ${analytics.deathOverForecast.projectedDeathRuns} more runs in the death overs ` +
+            `(confidence ${analytics.deathOverForecast.confidence}%), based on ${10 - snapshot.wickets} wickets in hand ` +
+            `and recent scoring momentum.`,
+          tone: analytics.deathOverForecast.projectedDeathRuns >= 50 ? "good" as const : "neutral" as const,
+        }
+      : {
+          id: "death-forecast",
+          label: "Death-over forecast",
+          value: "In death overs",
+          insight: "Match is currently in the death phase — run tally updates after each delivery.",
+          tone: "neutral" as const,
+        },
+    // ── Legacy cards ─────────────────────────────────────────────────────────────
     {
       id: "current-rate",
       label: "Current run rate",

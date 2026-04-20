@@ -13,6 +13,15 @@ import type {
   LiveTimelinePoint,
 } from "@/types/eda";
 import { clamp, getScheduledOvers, inferPhase, round } from "@/lib/eda/common";
+import {
+  computeBayesianWinProbability,
+  entropyWeightedMomentum,
+  wicketCascadeRisk,
+  deathOverForecast,
+  runProbabilityIndex,
+  globalT20Prior,
+} from "@/lib/eda/win-probability";
+import { resourcePercentage } from "@/lib/eda/resource-curve";
 
 type BallState = {
   ball: BallByBall;
@@ -150,6 +159,7 @@ function projectTotalAtState(input: {
   );
 }
 
+/** Delegate to Bayesian engine for ball-level win probability */
 function winProbabilityAtState(input: {
   matchType: string;
   runs: number;
@@ -162,37 +172,30 @@ function winProbabilityAtState(input: {
   venuePar: number | null;
   venueChaseWinPct: number | null;
   pressure: number;
+  recentRunRate?: number | null;
+  phase: string;
 }) {
-  const scheduledOvers = getScheduledOvers(input.matchType);
-  const wicketsInHand = Math.max(0, 10 - input.wickets);
+  const scheduledOvers = getScheduledOvers(input.matchType) ?? 20;
+  const prior = globalT20Prior(input.venueChaseWinPct);
+  if (input.venuePar !== null) prior.avgTarget = input.venuePar;
 
-  if (input.target && input.requiredRate !== null && scheduledOvers !== null) {
-    const oversRemaining = Math.max(scheduledOvers - input.oversUsed, 0);
-    const runsRemaining = Math.max(input.target - input.runs, 0);
-    if (runsRemaining <= 0) return 99;
-    if (oversRemaining <= 0) return 1;
-
-    const rateEdge = input.currentRunRate - input.requiredRate;
-    const projectionEdge = input.projectedTotal - input.target;
-    const resourceFactor = (wicketsInHand - 5) * 2.9 + oversRemaining * 0.35;
-    const venueBias = input.venueChaseWinPct !== null ? (input.venueChaseWinPct - 50) * 0.18 : 0;
-
-    return clamp(
-      round(50 + projectionEdge * 0.45 + rateEdge * 7 + resourceFactor + venueBias - input.pressure * 0.12, 1),
-      1,
-      99
-    );
-  }
-
-  const parTotal = input.venuePar ?? defaultParTotal(input.matchType);
-  const projectionEdge = input.projectedTotal - parTotal;
-  const venueBias = input.venueChaseWinPct !== null ? (50 - input.venueChaseWinPct) * 0.14 : 0;
-
-  return clamp(
-    round(50 + projectionEdge * 0.28 + wicketsInHand * 1.9 + venueBias - input.pressure * 0.1, 1),
-    4,
-    96
+  const result = computeBayesianWinProbability(
+    {
+      innings: input.target !== null ? 2 : 1,
+      runs: input.runs,
+      wickets: input.wickets,
+      overs: input.oversUsed,
+      scheduledOvers,
+      target: input.target,
+      currentRunRate: input.currentRunRate,
+      requiredRunRate: input.requiredRate,
+      recentRunRate: input.recentRunRate ?? null,
+      matchType: input.matchType,
+      phase: input.phase,
+    },
+    prior
   );
+  return result.probability;
 }
 
 function sortBallsAscending(balls: BallByBall[]) {
@@ -256,6 +259,14 @@ function buildBallStates(
         : null;
     const phase = inferPhase(oversUsed, match.matchType);
     const expectedRuns = phaseBaseRunRate(match.matchType, phase) / 6;
+
+    // Compute recent run rate from last 12 balls for Bayesian engine
+    const recentBalls = sortBallsAscending(balls).slice(-12);
+    const recentLegal = recentBalls.filter((b) => b.legalBall !== false);
+    const recentRunRate = recentLegal.length >= 3
+      ? (recentBalls.reduce((s, b) => s + b.score, 0) / Math.max(recentLegal.length / 6, 0.1))
+      : null;
+
     const projectedTotal = projectTotalAtState({
       matchType: match.matchType,
       runs: cumulativeRuns,
@@ -285,6 +296,8 @@ function buildBallStates(
       venuePar: venue.avgFirstInningsScore,
       venueChaseWinPct: venue.chaseWinPct,
       pressure,
+      recentRunRate,
+      phase,
     });
     const deltaWinProbability = round(winProbability - previousWinProbability, 1);
     previousWinProbability = winProbability;
@@ -792,10 +805,36 @@ export function buildLiveAnalyticsBundle(input: {
   scorecards: Scorecard[] | null;
   snapshot: LivePressureSnapshot;
   venue: HistoricalVenueSnapshot;
+  winPrior?: import("@/lib/eda/win-probability").WinProbabilityPrior;
 }): LiveAnalyticsBundle {
   const currentInningsBalls = sliceTrailingInningsBalls(input.commentaryBalls);
+  const scheduledOvers = getScheduledOvers(input.match.matchType) ?? 20;
+  const oversRemaining = Math.max(scheduledOvers - input.snapshot.overs, 0);
+
+  // Always compute DLS resource pct from live snapshot
+  const resourcePct = resourcePercentage(input.snapshot.wickets, oversRemaining);
 
   if (currentInningsBalls.length === 0) {
+    // Even with no ball data, compute Bayesian win probability from score state
+    const prior = input.winPrior ?? globalT20Prior(input.venue.chaseWinPct);
+    if (input.venue.avgFirstInningsScore !== null) prior.avgTarget = input.venue.avgFirstInningsScore;
+    const wpResult = computeBayesianWinProbability(
+      {
+        innings: input.snapshot.innings,
+        runs: input.snapshot.runs,
+        wickets: input.snapshot.wickets,
+        overs: input.snapshot.overs,
+        scheduledOvers,
+        target: input.snapshot.target,
+        currentRunRate: input.snapshot.currentRunRate,
+        requiredRunRate: input.snapshot.requiredRunRate,
+        recentRunRate: null,
+        matchType: input.match.matchType,
+        phase: input.snapshot.phase,
+      },
+      prior
+    );
+
     return {
       ballWinProbability: [],
       matchControlSwing: [],
@@ -811,6 +850,18 @@ export function buildLiveAnalyticsBundle(input: {
       dotBallHeatmap: [],
       matchupMatrix: [],
       boundaryPressure: null,
+      resourcePct: round(resourcePct, 1),
+      entropyMomentum: 50,
+      wicketCascadeRisk: 0,
+      deathOverForecast: null,
+      winProbabilityDetail: {
+        probability: wpResult.probability,
+        ci95: wpResult.ci95,
+        resourcePct: wpResult.resourcePct,
+        expectedRunsRemaining: wpResult.expectedRunsRemaining,
+        featureContributions: wpResult.featureContributions,
+        priorSampleSize: prior.sampleSize,
+      },
     };
   }
 
@@ -818,6 +869,59 @@ export function buildLiveAnalyticsBundle(input: {
   const timelines = buildTimelineSeries(states);
   const currentInning = pickCurrentInning(input.scorecards, input.snapshot);
   const boundaryPressure = buildBoundaryPressureSummary(states, input.match);
+
+  // ── Bayesian win probability from latest state ────────────────────────────
+  const prior = input.winPrior ?? globalT20Prior(input.venue.chaseWinPct);
+  if (input.venue.avgFirstInningsScore !== null) prior.avgTarget = input.venue.avgFirstInningsScore;
+  const lastState = states[states.length - 1];
+  const recent12 = currentInningsBalls.slice(-12);
+  const recentLegal = recent12.filter((b) => b.legalBall !== false);
+  const recentRunRate = recentLegal.length >= 3
+    ? recent12.reduce((s, b) => s + b.score, 0) / Math.max(recentLegal.length / 6, 0.1)
+    : null;
+
+  const wpResult = computeBayesianWinProbability(
+    {
+      innings: input.snapshot.innings,
+      runs: lastState?.cumulativeRuns ?? input.snapshot.runs,
+      wickets: lastState?.cumulativeWickets ?? input.snapshot.wickets,
+      overs: lastState?.oversUsed ?? input.snapshot.overs,
+      scheduledOvers,
+      target: input.snapshot.target,
+      currentRunRate: lastState?.currentRunRate ?? input.snapshot.currentRunRate,
+      requiredRunRate: lastState?.requiredRate ?? input.snapshot.requiredRunRate,
+      recentRunRate,
+      matchType: input.match.matchType,
+      phase: input.snapshot.phase,
+    },
+    prior
+  );
+
+  // ── Entropy-weighted momentum ─────────────────────────────────────────────
+  const recentScores = currentInningsBalls.slice(-24).map((b) => b.score);
+  const phaseBaseline = phaseBaseRunRate(input.match.matchType, input.snapshot.phase);
+  const eMomentum = entropyWeightedMomentum(recentScores, phaseBaseline);
+
+  // ── Wicket-cascade risk ─────────────────────────────────────────────────
+  const recentWickets = recent12.filter((b) => b.isWicket).length;
+  const cascadeRisk = wicketCascadeRisk({
+    wicketsAlreadyFallen: input.snapshot.wickets,
+    oversCompleted: input.snapshot.overs,
+    recentWicketsInLastNBalls: recentWickets,
+    recentBallsWindow: recent12.filter((b) => b.legalBall !== false).length,
+    nextNBalls: 18,
+  });
+
+  // ── Death-over forecast ──────────────────────────────────────────────────
+  const deathForecast = input.snapshot.overs < scheduledOvers * 0.75
+    ? deathOverForecast({
+        currentOvers: input.snapshot.overs,
+        currentWickets: input.snapshot.wickets,
+        currentRunRate: input.snapshot.currentRunRate,
+        recentRunRate,
+        scheduledOvers,
+      })
+    : null;
 
   return {
     ballWinProbability: timelines.winProbability,
@@ -834,5 +938,19 @@ export function buildLiveAnalyticsBundle(input: {
     dotBallHeatmap: buildHeatmap(states, input.match),
     matchupMatrix: buildMatchupMatrix(states),
     boundaryPressure,
+    resourcePct: round(resourcePct, 1),
+    entropyMomentum: round(eMomentum, 1),
+    wicketCascadeRisk: round(cascadeRisk, 1),
+    deathOverForecast: deathForecast
+      ? { projectedDeathRuns: deathForecast.projectedDeathRuns, confidence: deathForecast.confidence }
+      : null,
+    winProbabilityDetail: {
+      probability: wpResult.probability,
+      ci95: wpResult.ci95,
+      resourcePct: wpResult.resourcePct,
+      expectedRunsRemaining: wpResult.expectedRunsRemaining,
+      featureContributions: wpResult.featureContributions,
+      priorSampleSize: prior.sampleSize,
+    },
   };
 }
