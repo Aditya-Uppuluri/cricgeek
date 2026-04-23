@@ -308,7 +308,7 @@ export default function CalendarClient({ matches, source }: CalendarClientProps)
                   </Link>
                   {match.matchEnded ? (
                     <Link
-                      href={`/matches/${match.id}/analysis`}
+                      href={`/matches/${match.id}/post-match`}
                       className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-3 py-2 text-xs font-semibold text-white hover:bg-white/10"
                     >
                       Analysis
@@ -536,7 +536,7 @@ export default function CalendarClient({ matches, source }: CalendarClientProps)
                       Match Centre
                     </Link>
                     <Link
-                      href={`/matches/${match.id}/analysis`}
+                      href={`/matches/${match.id}/post-match`}
                       className="inline-flex items-center gap-1 rounded-lg bg-white/5 px-2 py-1 text-[11px] font-medium text-white hover:bg-white/10"
                     >
                       Analysis

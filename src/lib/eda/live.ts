@@ -46,6 +46,16 @@ function liveModelWarning(label: string, priorSampleSize: number, ballsTracked: 
   return null;
 }
 
+function buildReadiness(current: number, required: number, unit: "balls" | "overs", label: string) {
+  if (current >= required) return null;
+  return {
+    label,
+    current,
+    required,
+    unit,
+  } as const;
+}
+
 function isT20Match(match: Match) {
   return /t20/i.test(match.matchType);
 }
@@ -195,6 +205,7 @@ export async function buildLiveEdaReport(
     options.scorecards !== undefined ? Promise.resolve(options.scorecards) : getMatchScorecard(match.id, { fresh: options.fresh ?? true }),
   ]);
   const ballsTracked = commentary?.bbb.length ?? 0;
+  const legalBallsTracked = commentary?.bbb.filter((ball) => ball.legalBall !== false).length ?? 0;
 
   // Build win-probability prior from venue warehouse data
   const winPrior: WinProbabilityPrior =
@@ -226,6 +237,16 @@ export async function buildLiveEdaReport(
   const winProbabilitySample = wp?.priorSampleSize ?? winPrior.sampleSize;
   const winProbabilityConfidence = liveModelConfidence(winProbabilitySample, ballsTracked);
   const secondaryModelConfidence = liveModelConfidence(winProbabilitySample, ballsTracked, { strict: true });
+  const pressureReadiness = buildReadiness(legalBallsTracked, 8, "balls", "Pressure index unlocks once at least 8 legal balls have shaped the innings tempo.");
+  const momentumReadiness = buildReadiness(legalBallsTracked, 8, "balls", "Momentum needs at least 8 legal balls so one boundary or dot-ball burst does not dominate the read.");
+  const cascadeReadiness = buildReadiness(legalBallsTracked, 12, "balls", "Wicket-cascade risk needs a longer sequence to stabilize dismissal clustering.");
+  const boundaryReadiness = buildReadiness(legalBallsTracked, 8, "balls", "Boundary-pressure trends need at least 8 legal balls of tracked scoring.");
+  const deathForecastReadiness = buildReadiness(
+    legalBallsTracked,
+    Math.max(12, Math.round(fixedOvers * 0.6) * 6),
+    "balls",
+    "Death-over forecasting unlocks deeper into the innings once enough runway has been observed."
+  );
 
   // ── Run-Probability Index (RPI) ───────────────────────────────────────────
   const rpi = runProbabilityIndex(
@@ -303,57 +324,71 @@ export async function buildLiveEdaReport(
     {
       id: "rpi",
       label: "State advantage index",
-      value: `${rpi}`,
+      value: pressureReadiness ? "Collecting…" : `${rpi}`,
       insight:
-        rpi >= 60
-          ? `Model-derived state score ${rpi}/100 — ${snapshot.battingTeam} are tracking above par when wickets, resources, and current tempo are blended together.`
-          : rpi <= 40
-            ? `Model-derived state score ${rpi}/100 — the fielding side holds the balance; a wicket or two could decide this match.`
-            : `Model-derived state score ${rpi}/100 — this match is evenly poised; small state changes will swing it decisively.`,
-      tone: rpi >= 60 ? "good" as const : rpi <= 40 ? "warning" as const : "neutral" as const,
+        pressureReadiness
+          ? "Collecting enough live data to stabilize the blended state-advantage read."
+          : rpi >= 60
+            ? `Model-derived state score ${rpi}/100 — ${snapshot.battingTeam} are tracking above par when wickets, resources, and current tempo are blended together.`
+            : rpi <= 40
+              ? `Model-derived state score ${rpi}/100 — the fielding side holds the balance; a wicket or two could decide this match.`
+              : `Model-derived state score ${rpi}/100 — this match is evenly poised; small state changes will swing it decisively.`,
+      tone: pressureReadiness ? "neutral" as const : rpi >= 60 ? "good" as const : rpi <= 40 ? "warning" as const : "neutral" as const,
       quality: buildMetricQuality({
         sampleSize: winProbabilitySample,
         provenance: "modeled",
         confidence: secondaryModelConfidence,
-        warning: "Secondary derived state score; use win probability as the primary calibrated model output.",
+        warning: pressureReadiness
+          ? "Suppressed until the innings has at least 8 legal balls of tracked state."
+          : "Secondary derived state score; use win probability as the primary calibrated model output.",
+        suppressed: Boolean(pressureReadiness),
+        readiness: pressureReadiness,
       }),
     },
     // ── Card 4: Entropy Momentum ────────────────────────────────────────────────
     {
       id: "entropy-momentum",
       label: "Batting momentum",
-      value: `${analytics.entropyMomentum}/100`,
+      value: momentumReadiness ? "Collecting…" : `${analytics.entropyMomentum}/100`,
       insight:
-        analytics.entropyMomentum >= 60
-          ? `Decay-weighted batting momentum is strong (${analytics.entropyMomentum}/100) — recent scoring has been above phase baseline with volatile, boundary-heavy deliveries.`
-          : analytics.entropyMomentum <= 40
-            ? `Batting momentum is suppressed (${analytics.entropyMomentum}/100) — the bowling side is applying effective control through dot balls and low-value deliveries.`
-            : `Batting momentum is neutral (${analytics.entropyMomentum}/100) — neither side has established a clear tempo advantage in the last 4 overs.`,
-      tone: analytics.entropyMomentum >= 60 ? "good" as const : analytics.entropyMomentum <= 40 ? "warning" as const : "neutral" as const,
+        momentumReadiness
+          ? "Collecting enough live data to stabilize the momentum read."
+          : analytics.entropyMomentum >= 60
+            ? `Decay-weighted batting momentum is strong (${analytics.entropyMomentum}/100) — recent scoring has been above phase baseline with volatile, boundary-heavy deliveries.`
+            : analytics.entropyMomentum <= 40
+              ? `Batting momentum is suppressed (${analytics.entropyMomentum}/100) — the bowling side is applying effective control through dot balls and low-value deliveries.`
+              : `Batting momentum is neutral (${analytics.entropyMomentum}/100) — neither side has established a clear tempo advantage in the last 4 overs.`,
+      tone: momentumReadiness ? "neutral" as const : analytics.entropyMomentum >= 60 ? "good" as const : analytics.entropyMomentum <= 40 ? "warning" as const : "neutral" as const,
       quality: buildMetricQuality({
-        sampleSize: Math.min(ballsTracked, 24),
+        sampleSize: Math.min(legalBallsTracked, 24),
         provenance: "modeled",
-        confidence: liveModelConfidence(0, ballsTracked, { strict: true }),
-        warning: ballsTracked < 12 ? "Momentum is based on fewer than 12 tracked balls." : null,
+        confidence: liveModelConfidence(0, legalBallsTracked, { strict: true }),
+        warning: momentumReadiness ? "Suppressed until at least 8 legal balls have been tracked." : legalBallsTracked < 12 ? "Momentum is based on fewer than 12 tracked balls." : null,
+        suppressed: Boolean(momentumReadiness),
+        readiness: momentumReadiness,
       }),
     },
     // ── Card 5: Wicket-Cascade Risk ────────────────────────────────────────────
     {
       id: "cascade-risk",
       label: "Wicket-cascade risk",
-      value: `${analytics.wicketCascadeRisk}%`,
+      value: cascadeReadiness ? "Collecting…" : `${analytics.wicketCascadeRisk}%`,
       insight:
-        analytics.wicketCascadeRisk >= 40
-          ? `${analytics.wicketCascadeRisk}% probability of 2+ wickets in the next 3 overs — historical wicket-cluster patterns and recent dismissal rate suggest a mid-innings collapse is a live risk.`
-          : analytics.wicketCascadeRisk <= 15
-            ? `Low cascade risk (${analytics.wicketCascadeRisk}%) — scoring is fluid and dismissals have been spread across the innings so far.`
-            : `Moderate cascade risk (${analytics.wicketCascadeRisk}%) — the match could pivot quickly if a wicket falls in the next over.`,
-      tone: analytics.wicketCascadeRisk >= 40 ? "warning" as const : analytics.wicketCascadeRisk <= 15 ? "good" as const : "neutral" as const,
+        cascadeReadiness
+          ? "Collecting enough live data to estimate short-window collapse risk."
+          : analytics.wicketCascadeRisk >= 40
+            ? `${analytics.wicketCascadeRisk}% probability of 2+ wickets in the next 3 overs — historical wicket-cluster patterns and recent dismissal rate suggest a mid-innings collapse is a live risk.`
+            : analytics.wicketCascadeRisk <= 15
+              ? `Low cascade risk (${analytics.wicketCascadeRisk}%) — scoring is fluid and dismissals have been spread across the innings so far.`
+              : `Moderate cascade risk (${analytics.wicketCascadeRisk}%) — the match could pivot quickly if a wicket falls in the next over.`,
+      tone: cascadeReadiness ? "neutral" as const : analytics.wicketCascadeRisk >= 40 ? "warning" as const : analytics.wicketCascadeRisk <= 15 ? "good" as const : "neutral" as const,
       quality: buildMetricQuality({
-        sampleSize: Math.min(ballsTracked, 12),
+        sampleSize: Math.min(legalBallsTracked, 12),
         provenance: "modeled",
-        confidence: liveModelConfidence(0, ballsTracked, { strict: true }),
-        warning: ballsTracked < 12 ? "Collapse risk is based on a very short live window." : null,
+        confidence: liveModelConfidence(0, legalBallsTracked, { strict: true }),
+        warning: cascadeReadiness ? "Suppressed until at least 12 legal balls have been tracked." : legalBallsTracked < 12 ? "Collapse risk is based on a very short live window." : null,
+        suppressed: Boolean(cascadeReadiness),
+        readiness: cascadeReadiness,
       }),
     },
     // ── Card 6: Death-Over Forecast ─────────────────────────────────────────────
@@ -361,25 +396,31 @@ export async function buildLiveEdaReport(
       ? {
           id: "death-forecast",
           label: "Death-over forecast",
-          value: `+${analytics.deathOverForecast.projectedDeathRuns}`,
+          value: deathForecastReadiness ? "Collecting…" : `+${analytics.deathOverForecast.projectedDeathRuns}`,
           insight:
-            `Model projects ${analytics.deathOverForecast.projectedDeathRuns} more runs in the death overs ` +
-            `(confidence ${analytics.deathOverForecast.confidence}%), based on ${10 - snapshot.wickets} wickets in hand ` +
-            `and recent scoring momentum.`,
-          tone: analytics.deathOverForecast.projectedDeathRuns >= 50 ? "good" as const : "neutral" as const,
+            deathForecastReadiness
+              ? "Collecting enough live data to stabilize the long-range death-over projection."
+              : `Model projects ${analytics.deathOverForecast.projectedDeathRuns} more runs in the death overs ` +
+                `(confidence ${analytics.deathOverForecast.confidence}%), based on ${10 - snapshot.wickets} wickets in hand ` +
+                `and recent scoring momentum.`,
+          tone: deathForecastReadiness ? "neutral" as const : analytics.deathOverForecast.projectedDeathRuns >= 50 ? "good" as const : "neutral" as const,
           quality: buildMetricQuality({
-            sampleSize: Math.min(ballsTracked, 18),
+            sampleSize: Math.min(legalBallsTracked, 18),
             provenance: "modeled",
             confidence:
               snapshot.overs >= fixedOvers * 0.6
-                ? liveModelConfidence(0, ballsTracked)
+                ? liveModelConfidence(0, legalBallsTracked)
                 : "low",
             warning:
-              snapshot.overs < fixedOvers * 0.6
-                ? "Long-range death forecast; confidence improves materially once the innings gets deeper."
-                : ballsTracked < 12
-                  ? "Death forecast is based on a short recent scoring window."
-                  : null,
+              deathForecastReadiness
+                ? "Suppressed until the innings has enough depth to support a death-over forecast."
+                : snapshot.overs < fixedOvers * 0.6
+                  ? "Long-range death forecast; confidence improves materially once the innings gets deeper."
+                  : legalBallsTracked < 12
+                    ? "Death forecast is based on a short recent scoring window."
+                    : null,
+            suppressed: Boolean(deathForecastReadiness),
+            readiness: deathForecastReadiness,
           }),
         }
       : {
@@ -408,17 +449,23 @@ export async function buildLiveEdaReport(
     {
       id: "pressure-index",
       label: "Pressure index",
-      value: `${snapshot.pressureIndex}`,
+      value: pressureReadiness ? "Collecting…" : `${snapshot.pressureIndex}`,
       insight:
-        snapshot.pressureIndex >= 65
-          ? "The batting side is under strong scoreboard pressure."
-          : "The current state is manageable, but one wicket can swing the pressure quickly.",
-      tone: snapshot.pressureIndex >= 65 ? "warning" as const : "neutral" as const,
+        pressureReadiness
+          ? "Collecting enough live data to stabilize the pressure profile."
+          : snapshot.pressureIndex >= 65
+            ? "The batting side is under strong scoreboard pressure."
+            : "The current state is manageable, but one wicket can swing the pressure quickly.",
+      tone: pressureReadiness ? "neutral" as const : snapshot.pressureIndex >= 65 ? "warning" as const : "neutral" as const,
       quality: buildMetricQuality({
-        sampleSize: Math.max(Math.round(snapshot.overs * 6), 1),
+        sampleSize: Math.max(legalBallsTracked, 1),
         provenance: "modeled",
-        confidence: liveModelConfidence(winProbabilitySample, ballsTracked, { strict: true }),
-        warning: "Derived from current run rate, wickets, and target pressure rather than a separately calibrated classifier.",
+        confidence: liveModelConfidence(winProbabilitySample, legalBallsTracked, { strict: true }),
+        warning: pressureReadiness
+          ? "Suppressed until at least 8 legal balls have been tracked."
+          : "Derived from current run rate, wickets, and target pressure rather than a separately calibrated classifier.",
+        suppressed: Boolean(pressureReadiness),
+        readiness: pressureReadiness,
       }),
     },
     {
@@ -470,30 +517,37 @@ export async function buildLiveEdaReport(
       id: "boundary-pressure",
       label: "Boundary pressure",
       value:
-        boundaryPressure !== null
+        boundaryReadiness || boundaryPressure === null
+          ? "Collecting…"
+          : boundaryPressure !== null
           ? `${boundaryPressure.recentBoundaryRate}/ov`
           : "Waiting",
       insight:
-        boundaryPressure !== null
+        boundaryReadiness || boundaryPressure === null
+          ? "Collecting enough live data to stabilize the live boundary trend."
+          : boundaryPressure !== null
           ? `${boundaryPressure.recentOversLabel}: ${boundaryPressure.recentFours}x4, ${boundaryPressure.recentSixes}x6. Forecast ${boundaryPressure.forecastBoundaryRate}/ov against a ${boundaryPressure.expectedBoundaryRate}/ov phase baseline.`
           : "Boundary pressure appears once enough tracked ball events are available.",
       tone:
-        boundaryPressure !== null
+        boundaryReadiness || boundaryPressure === null
+          ? "neutral" as const
+          : boundaryPressure !== null
           ? boundaryPressure.recentBoundaryRate >= boundaryPressure.expectedBoundaryRate
             ? "good" as const
             : "warning" as const
           : "neutral" as const,
       quality: buildMetricQuality({
-        sampleSize: Math.min(ballsTracked, 12),
+        sampleSize: Math.min(legalBallsTracked, 12),
         provenance: "modeled",
-        confidence: liveModelConfidence(0, ballsTracked, { strict: true }),
+        confidence: liveModelConfidence(0, legalBallsTracked, { strict: true }),
         warning:
-          boundaryPressure === null
-            ? "Suppressed until enough tracked ball events are available."
-            : ballsTracked < 12
+          boundaryReadiness || boundaryPressure === null
+            ? "Suppressed until the innings has enough tracked balls for a stable boundary trend."
+            : legalBallsTracked < 12
               ? "Boundary-pressure forecast is based on fewer than 12 tracked balls."
               : null,
-        suppressed: boundaryPressure === null,
+        suppressed: boundaryReadiness !== null || boundaryPressure === null,
+        readiness: boundaryReadiness,
       }),
     },
     {

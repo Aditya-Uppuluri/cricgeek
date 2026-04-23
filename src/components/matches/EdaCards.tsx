@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import type { PostMatchEdaCard } from "@/types/cricket";
 import type { MetricConfidenceTier, MetricUncertainty } from "@/types/metrics";
 import { cn } from "@/lib/utils";
@@ -99,6 +99,38 @@ function confidenceBadgeClass(confidence?: MetricConfidenceTier) {
   return "border-red-400/25 bg-red-400/10 text-red-100";
 }
 
+function InsightText({
+  text,
+  className = "mt-2 text-xs leading-relaxed text-gray-400",
+}: {
+  text: string;
+  className?: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const longText = text.length > 150;
+
+  return (
+    <div className="space-y-2">
+      <p
+        title={text}
+        className={cn(className, !expanded && longText && "line-clamp-4")}
+        style={{ overflowWrap: "anywhere" }}
+      >
+        {text}
+      </p>
+      {longText ? (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className="text-[11px] font-semibold text-violet-300 transition-colors hover:text-violet-200"
+        >
+          {expanded ? "Show less" : "Read more"}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 function CardFrame({
   card,
   className,
@@ -142,6 +174,25 @@ function QualityStrip({ card }: { card: PostMatchEdaCard }) {
       </div>
       {card.subValue ? <p className="text-[11px] text-gray-500">{card.subValue}</p> : null}
       {intervalLabel ? <p className="text-[11px] text-gray-500">{intervalLabel}</p> : null}
+      {quality?.readiness ? (
+        <div className="space-y-2 rounded-xl border border-sky-500/15 bg-sky-500/[0.06] px-3 py-3">
+          <div className="flex items-center justify-between gap-3 text-[11px] text-sky-100">
+            <span>Collecting enough live data…</span>
+            <span>
+              {quality.readiness.current}/{quality.readiness.required} {quality.readiness.unit}
+            </span>
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-black/20">
+            <div
+              className="h-full rounded-full bg-sky-400 transition-all duration-500"
+              style={{
+                width: `${Math.min(100, (quality.readiness.current / Math.max(quality.readiness.required, 1)) * 100)}%`,
+              }}
+            />
+          </div>
+          <p className="text-[11px] text-sky-100/90">{quality.readiness.label}</p>
+        </div>
+      ) : null}
       {quality?.warning ? (
         <p className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[11px] text-amber-100">
           {quality.warning}
@@ -170,7 +221,7 @@ function WinProbabilityCard({ card }: { card: PostMatchEdaCard }) {
         {ci95 ? <span className="text-[11px] text-gray-500">±{Math.round((ci95[1] - ci95[0]) / 2)}%</span> : null}
       </div>
       <ProbabilityGauge value={prob} ci95={ci95} />
-      <p className="mt-3 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} className="mt-3 text-xs leading-relaxed text-gray-400" />
     </CardFrame>
   );
 }
@@ -187,7 +238,7 @@ function ResourceCard({ card }: { card: PostMatchEdaCard }) {
       </div>
       <p className="mt-2 text-2xl font-black text-white">{card.value}</p>
       <MeterBar value={val} color={color} />
-      <p className="mt-2 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} />
     </CardFrame>
   );
 }
@@ -213,7 +264,7 @@ function CascadeRiskCard({ card }: { card: PostMatchEdaCard }) {
           <p className="text-[10px] text-gray-500">next 3 overs</p>
         </div>
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} />
     </CardFrame>
   );
 }
@@ -259,7 +310,7 @@ function MomentumCard({ card }: { card: PostMatchEdaCard }) {
         )}
         <div className="absolute h-full w-px bg-white/20" style={{ left: "50%" }} />
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} />
     </CardFrame>
   );
 }
@@ -280,7 +331,7 @@ function DeathForecastCard({ card }: { card: PostMatchEdaCard }) {
         <p className={cn("text-2xl font-black", isInDeath ? "text-gray-400" : "text-white")}>{card.value}</p>
         {!isInDeath ? <span className="text-sm text-gray-500">runs</span> : null}
       </div>
-      <p className="mt-2 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} />
     </CardFrame>
   );
 }
@@ -306,7 +357,7 @@ function RpiCard({ card }: { card: PostMatchEdaCard }) {
         <span className="text-xs text-gray-500">/100</span>
       </div>
       <MeterBar value={val} color={color} />
-      <p className="mt-2 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} />
     </CardFrame>
   );
 }
@@ -327,7 +378,7 @@ function DefaultCard({ card }: { card: PostMatchEdaCard }) {
         <ToneIcon tone={card.tone} />
       </div>
       <p className="mt-2 text-2xl font-black text-white">{card.value}</p>
-      <p className="mt-2 text-xs leading-relaxed text-gray-400 line-clamp-3">{card.insight}</p>
+      <InsightText text={card.insight} />
     </CardFrame>
   );
 }

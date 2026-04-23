@@ -7,6 +7,29 @@ export interface MetricSupport {
   uncertainty?: MetricUncertainty | null;
 }
 
+export interface LiveRecommendationTriggerState {
+  ready: boolean;
+  shouldRefresh: boolean;
+  triggerKey: string | null;
+  triggerReason: string | null;
+  holdReason?: string | null;
+  currentEvidence: number;
+  requiredEvidence: number;
+  evidenceUnit: "balls" | "overs" | "wickets";
+  candidateCount: number;
+  squadConfirmed: boolean;
+  warning?: string | null;
+}
+
+export interface LiveRecommendationEngineState {
+  batting: LiveRecommendationTriggerState;
+  bowling: LiveRecommendationTriggerState;
+  squadSource: "confirmed" | "fallback";
+  squadWarning?: string | null;
+  battingSquadSize: number;
+  bowlingSquadSize: number;
+}
+
 export interface InsightsMetadata {
   teams: string[];
   teamsByGender: {
@@ -185,4 +208,6 @@ export interface LiveAdvisorResponse extends InsightsAdvisorResponse {
     bowlingTeam: string;
     matchGender: string;
   };
+  engine: LiveRecommendationEngineState;
+  squadFiltered: boolean;
 }

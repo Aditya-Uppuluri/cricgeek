@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 interface AdSlotProps {
   slot: string;
@@ -9,7 +9,6 @@ interface AdSlotProps {
 }
 
 export default function AdSlot({ slot, format = "auto", className = "" }: AdSlotProps) {
-  const [adsLoaded, setAdsLoaded] = useState(false);
   const clientId = process.env.NEXT_PUBLIC_ADSENSE_CLIENT_ID;
 
   useEffect(() => {
@@ -17,7 +16,6 @@ export default function AdSlot({ slot, format = "auto", className = "" }: AdSlot
       try {
         // @ts-expect-error - adsbygoogle is injected externally
         (window.adsbygoogle = window.adsbygoogle || []).push({});
-        setAdsLoaded(true);
       } catch {
         // AdSense not loaded
       }

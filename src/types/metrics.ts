@@ -9,6 +9,13 @@ export interface MetricUncertainty {
   decimals?: number;
 }
 
+export interface MetricReadiness {
+  label: string;
+  current: number;
+  required: number;
+  unit: string;
+}
+
 export interface MetricQuality {
   sampleSize?: number | null;
   confidence?: MetricConfidenceTier;
@@ -17,4 +24,5 @@ export interface MetricQuality {
   suppressed?: boolean;
   uncertainty?: MetricUncertainty | null;
   provenance?: MetricProvenance;
+  readiness?: MetricReadiness | null;
 }

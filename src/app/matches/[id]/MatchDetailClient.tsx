@@ -904,7 +904,7 @@ export default function MatchDetailClient({
                 Match Preview Page
               </Link>
               <Link
-                href={`/matches/${liveMatch.id}/analysis`}
+                href={`/matches/${liveMatch.id}/post-match`}
                 className="block rounded-xl bg-[#0f2a17] px-3 py-3 text-center text-xs font-semibold text-[#31d260] hover:bg-[#16361f]"
               >
                 Post-Match Analysis Page

@@ -12,12 +12,42 @@ import type {
 
 type LiveEdaChartsProps = {
   analytics: LiveAnalyticsBundle;
+  ballsTracked: number;
+  completedOvers: number;
 };
 
 function EmptyChart({ message }: { message: string }) {
   return (
     <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-6 text-sm text-gray-400">
       {message}
+    </div>
+  );
+}
+
+function ProgressChart({
+  current,
+  required,
+  unit,
+  message,
+}: {
+  current: number;
+  required: number;
+  unit: string;
+  message: string;
+}) {
+  const progress = Math.min(100, (current / Math.max(required, 1)) * 100);
+  return (
+    <div className="space-y-3 rounded-lg border border-sky-500/20 bg-sky-500/[0.06] px-4 py-5">
+      <div className="flex items-center justify-between gap-3 text-sm text-sky-100">
+        <span>Collecting enough live data…</span>
+        <span>
+          {current}/{required} {unit}
+        </span>
+      </div>
+      <div className="h-2 w-full overflow-hidden rounded-full bg-black/20">
+        <div className="h-full rounded-full bg-sky-400 transition-all duration-500" style={{ width: `${progress}%` }} />
+      </div>
+      <p className="text-sm text-sky-100/90">{message}</p>
     </div>
   );
 }
@@ -479,117 +509,173 @@ function BoundaryPressurePanel({ summary }: { summary: LiveBoundaryPressureSumma
   );
 }
 
-export default function LiveEdaCharts({ analytics }: LiveEdaChartsProps) {
+export default function LiveEdaCharts({ analytics, ballsTracked, completedOvers }: LiveEdaChartsProps) {
+  const chartReady = (requiredBalls: number, fallbackOvers = 0) => {
+    return ballsTracked >= requiredBalls && completedOvers >= fallbackOvers;
+  };
+
   return (
     <div className="grid gap-5 xl:grid-cols-2">
       <ChartFrame
         title="Ball-by-ball win probability chart"
         subtitle="Live win-probability path recalculated on every tracked ball."
       >
-        <LineChart points={analytics.ballWinProbability} color="#22c55e" yLabel="Win probability %" />
+        {chartReady(6) ? (
+          <LineChart points={analytics.ballWinProbability} color="#22c55e" yLabel="Win probability %" />
+        ) : (
+          <ProgressChart current={ballsTracked} required={6} unit="balls" message="Win-probability movement needs a few tracked balls before the curve is meaningful." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Match control swing chart"
         subtitle="Positive values mean the batting side has the live control edge."
       >
-        <LineChart points={analytics.matchControlSwing} color="#60a5fa" yLabel="Control swing" />
+        {chartReady(6) ? (
+          <LineChart points={analytics.matchControlSwing} color="#60a5fa" yLabel="Control swing" />
+        ) : (
+          <ProgressChart current={ballsTracked} required={6} unit="balls" message="Control swing needs a short run of tracked state changes before it stabilizes." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Pressure index timeline"
         subtitle="A running read of scoreboard pressure through the current innings."
       >
-        <LineChart points={analytics.pressureTimeline} color="#f59e0b" yLabel="Pressure index" />
+        {chartReady(8) ? (
+          <LineChart points={analytics.pressureTimeline} color="#f59e0b" yLabel="Pressure index" />
+        ) : (
+          <ProgressChart current={ballsTracked} required={8} unit="balls" message="Pressure sequencing is held back until the innings has at least 8 tracked balls." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Required vs actual rate with wickets marked"
         subtitle="Actual rate is compared against chase requirement or venue par rate."
       >
-        <LineChart points={analytics.requiredVsActualRate} color="#38bdf8" secondaryColor="#94a3b8" yLabel="Runs per over" />
+        {chartReady(8) ? (
+          <LineChart points={analytics.requiredVsActualRate} color="#38bdf8" secondaryColor="#94a3b8" yLabel="Runs per over" />
+        ) : (
+          <ProgressChart current={ballsTracked} required={8} unit="balls" message="Rate comparison unlocks once a few overs of scoring shape have formed." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Top turning-point ball bar chart"
         subtitle="Largest ball-level state changes in the live model."
       >
-        <HorizontalBars
-          data={analytics.topTurningBalls}
-          emptyMessage="Turning-point balls appear once enough tracked events have changed the state materially."
-        />
+        {chartReady(8) ? (
+          <HorizontalBars
+            data={analytics.topTurningBalls}
+            emptyMessage="Turning-point balls appear once enough tracked events have changed the state materially."
+          />
+        ) : (
+          <ProgressChart current={ballsTracked} required={8} unit="balls" message="Turning-point balls need a minimum event window before any swing is trustworthy." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Top turning-point over bar chart"
         subtitle="Overs with the biggest combined impact on the live state."
       >
-        <HorizontalBars
-          data={analytics.topTurningOvers}
-          emptyMessage="Turning-point overs appear after the innings has enough event density."
-          colorClass="bg-blue-400"
-        />
+        {chartReady(12, 2) ? (
+          <HorizontalBars
+            data={analytics.topTurningOvers}
+            emptyMessage="Turning-point overs appear after the innings has enough event density."
+            colorClass="bg-blue-400"
+          />
+        ) : (
+          <ProgressChart current={ballsTracked} required={12} unit="balls" message="Over-level swing waits for at least two overs of tracked pressure movement." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Context-adjusted batter impact chart"
         subtitle="Actual output versus live context expectation for tracked batters."
       >
-        <DivergingBars
-          data={analytics.batterImpact}
-          metricLabel="Runs"
-          emptyMessage="Batter impact appears once tracked balls can be attributed to individual batters."
-        />
+        {chartReady(8) ? (
+          <DivergingBars
+            data={analytics.batterImpact}
+            metricLabel="Runs"
+            emptyMessage="Batter impact appears once tracked balls can be attributed to individual batters."
+          />
+        ) : (
+          <ProgressChart current={ballsTracked} required={8} unit="balls" message="Batter impact needs enough attributed deliveries to separate noise from role." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Context-adjusted bowler impact chart"
         subtitle="Bowler influence adjusted for expected scoring context and wicket value."
       >
-        <DivergingBars
-          data={analytics.bowlerImpact}
-          metricLabel="Runs conceded"
-          emptyMessage="Bowler impact appears once the live feed can attribute enough tracked balls to bowlers."
-        />
+        {chartReady(6, 1) ? (
+          <DivergingBars
+            data={analytics.bowlerImpact}
+            metricLabel="Runs conceded"
+            emptyMessage="Bowler impact appears once the live feed can attribute enough tracked balls to bowlers."
+          />
+        ) : (
+          <ProgressChart current={ballsTracked} required={6} unit="balls" message="Bowler impact needs at least one over's worth of tracked deliveries." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Runs saved vs expected for bowlers"
         subtitle="Pure run suppression versus the live phase baseline."
       >
-        <DivergingBars
-          data={analytics.bowlerRunsSaved}
-          metricLabel="Runs conceded"
-          emptyMessage="Runs-saved view appears once bowler-level tracked balls are available."
-        />
+        {chartReady(6, 1) ? (
+          <DivergingBars
+            data={analytics.bowlerRunsSaved}
+            metricLabel="Runs conceded"
+            emptyMessage="Runs-saved view appears once bowler-level tracked balls are available."
+          />
+        ) : (
+          <ProgressChart current={ballsTracked} required={6} unit="balls" message="Runs-saved needs a full over of tracked bowling before it becomes useful." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Partnership influence chart"
         subtitle="Best-effort partnership stints inferred from batting order and ball sequence."
       >
-        <PartnershipBars data={analytics.partnershipInfluence} />
+        {chartReady(12, 2) ? (
+          <PartnershipBars data={analytics.partnershipInfluence} />
+        ) : (
+          <ProgressChart current={ballsTracked} required={12} unit="balls" message="Partnership influence waits for enough sequence data to identify a real stand." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Counterfactual scenario comparison chart"
         subtitle="Quick scenario tests around the current trend, surge, squeeze, and venue-par finish."
       >
-        <ScenarioBars data={analytics.counterfactuals} />
+        {chartReady(12, 2) ? (
+          <ScenarioBars data={analytics.counterfactuals} />
+        ) : (
+          <ProgressChart current={ballsTracked} required={12} unit="balls" message="Scenario comparisons unlock once the innings state is dense enough to project alternatives." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Boundary pressure pulse"
         subtitle="Recent fours and sixes with measured versus forecast boundary frequency."
       >
-        <BoundaryPressurePanel summary={analytics.boundaryPressure} />
+        {chartReady(8) ? (
+          <BoundaryPressurePanel summary={analytics.boundaryPressure} />
+        ) : (
+          <ProgressChart current={ballsTracked} required={8} unit="balls" message="Boundary pressure needs a meaningful sample of recent scoring events." />
+        )}
       </ChartFrame>
 
       <ChartFrame
         title="Dot-ball pressure heatmap"
         subtitle="Recent over-by-over pressure window with dots and wickets highlighted."
       >
-        <Heatmap cells={analytics.dotBallHeatmap} />
+        {chartReady(6, 1) ? (
+          <Heatmap cells={analytics.dotBallHeatmap} />
+        ) : (
+          <ProgressChart current={ballsTracked} required={6} unit="balls" message="The heatmap appears after the innings has at least one over of tracked deliveries." />
+        )}
       </ChartFrame>
 
       <ChartFrame
@@ -597,7 +683,11 @@ export default function LiveEdaCharts({ analytics }: LiveEdaChartsProps) {
         subtitle="Tracked pair-level outcomes from the current innings."
         className="xl:col-span-2"
       >
-        <MatchupMatrix data={analytics.matchupMatrix} />
+        {chartReady(8) ? (
+          <MatchupMatrix data={analytics.matchupMatrix} />
+        ) : (
+          <ProgressChart current={ballsTracked} required={8} unit="balls" message="The matchup matrix waits until enough batter-vs-bowler balls have been tracked." />
+        )}
       </ChartFrame>
     </div>
   );

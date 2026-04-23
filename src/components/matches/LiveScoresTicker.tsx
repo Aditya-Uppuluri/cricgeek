@@ -8,7 +8,7 @@
  * Shows only live matches: team codes + score in a compact pill.
  */
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useEffectEvent, useState } from "react";
 import type { Match } from "@/types/cricket";
 
 interface TickerItem {
@@ -37,7 +37,7 @@ export default function LiveScoresTicker() {
   const [lastUpdated, setLastUpdated] = useState<string>("");
   const [source, setSource] = useState<string>("");
 
-  const fetchScores = useCallback(async () => {
+  const fetchScores = useEffectEvent(async () => {
     try {
       const res = await fetch("/api/livescores", { cache: "no-store" });
       if (!res.ok) return;
@@ -58,13 +58,15 @@ export default function LiveScoresTicker() {
     } catch {
       // silently fail — don't break the page
     }
-  }, []);
+  });
 
   useEffect(() => {
-    fetchScores();
-    const interval = setInterval(fetchScores, 30_000);
+    void fetchScores();
+    const interval = setInterval(() => {
+      void fetchScores();
+    }, 30_000);
     return () => clearInterval(interval);
-  }, [fetchScores]);
+  }, []);
 
   if (items.length === 0) return null;
 

@@ -1,6 +1,6 @@
 import type { Match } from "@/types/cricket";
 import type { EdaConfidence, EdaConfidenceLabel, EdaFreshness, EdaSourceReference } from "@/types/eda";
-import type { MetricConfidenceTier, MetricProvenance, MetricQuality, MetricUncertainty } from "@/types/metrics";
+import type { MetricConfidenceTier, MetricProvenance, MetricQuality, MetricReadiness, MetricUncertainty } from "@/types/metrics";
 
 export function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -132,6 +132,7 @@ export function buildMetricQuality(input: {
   warning?: string | null;
   suppressed?: boolean;
   uncertainty?: MetricUncertainty | null;
+  readiness?: MetricReadiness | null;
 }): MetricQuality {
   return {
     sampleSize: input.sampleSize ?? null,
@@ -149,6 +150,7 @@ export function buildMetricQuality(input: {
     warning: input.warning ?? null,
     suppressed: input.suppressed ?? false,
     uncertainty: input.uncertainty ?? null,
+    readiness: input.readiness ?? null,
   };
 }
 

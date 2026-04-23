@@ -267,6 +267,24 @@ export interface PostMatchEdaReport {
   match: Match;
   intel: PostMatchIntel;
   benchmarkCards: PostMatchEdaCard[];
+  retrospective: {
+    summary: string;
+    analytics: LiveAnalyticsBundle | null;
+    ballsTracked: number;
+    matchSummaryCards: PostMatchEdaCard[];
+    battingCards: PostMatchEdaCard[];
+    bowlingCards: PostMatchEdaCard[];
+    advancedCards: PostMatchEdaCard[];
+    biggestSwings: string[];
+    recommendationReviewCards: PostMatchEdaCard[];
+    recommendationReviewNotes: string[];
+    ratings: Array<{
+      label: string;
+      score: number;
+      insight: string;
+    }>;
+    warnings: string[];
+  };
   historical: {
     winnerForm?: HistoricalTeamFormSnapshot | null;
     loserForm?: HistoricalTeamFormSnapshot | null;

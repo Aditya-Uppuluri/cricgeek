@@ -1,5 +1,7 @@
 "use client";
 
+import { useId } from "react";
+
 interface ScoreRingProps {
   score: number;
   size?: number;
@@ -22,10 +24,11 @@ export default function ScoreRing({
   label,
   showLabel = true,
 }: ScoreRingProps) {
+  const gradientSeed = useId().replace(/:/g, "");
   const radius = (size - strokeWidth) / 2;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
-  const gradientId = `score-gradient-${Math.random().toString(36).slice(2, 7)}`;
+  const gradientId = `score-gradient-${gradientSeed}`;
   const colors = getScoreGradient(score);
 
   return (

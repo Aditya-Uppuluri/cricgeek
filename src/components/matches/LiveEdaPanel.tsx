@@ -153,7 +153,11 @@ export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
           </div>
 
           <EdaCards cards={report.cards} />
-          <LiveEdaCharts analytics={report.analytics} />
+          <LiveEdaCharts
+            analytics={report.analytics}
+            ballsTracked={report.ballsTracked}
+            completedOvers={Math.max(Math.floor(report.snapshot.overs), 0)}
+          />
 
           {report.warnings.length > 0 ? (
             <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-4">
@@ -171,45 +175,14 @@ export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
             </div>
           ) : null}
 
-          {report.advisor ? (
-            <div className="grid gap-4 lg:grid-cols-2">
-              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
-                <h4 className="text-sm font-semibold text-white">Batting recommendations</h4>
-                <div className="mt-3 space-y-3">
-                  {report.advisor.battingRecommendations.slice(0, 3).map((item) => (
-                    <div key={`${item.player}-${item.team}`} className="rounded-lg border border-gray-800 bg-cg-dark-2 px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-white">{item.player}</p>
-                        <span className="text-xs text-cg-green">Fit {Math.round(item.situationSuitability)}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-gray-500">{item.team}</p>
-                      <p className="mt-2 text-sm text-gray-400">
-                        {item.reasons[0] || "Recommended for the current match state."}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
-                <h4 className="text-sm font-semibold text-white">Bowling recommendations</h4>
-                <div className="mt-3 space-y-3">
-                  {report.advisor.bowlingRecommendations.slice(0, 3).map((item) => (
-                    <div key={`${item.player}-${item.team}`} className="rounded-lg border border-gray-800 bg-cg-dark-2 px-4 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold text-white">{item.player}</p>
-                        <span className="text-xs text-cg-green">Utility {Math.round(item.utilityScore)}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-gray-500">{item.team}</p>
-                      <p className="mt-2 text-sm text-gray-400">
-                        {item.reasons[0] || "Recommended for the current match state."}
-                      </p>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
+          <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
+            <h4 className="text-sm font-semibold text-white">Recommendation cadence</h4>
+            <p className="mt-3 text-sm leading-7 text-gray-400">
+              Live player recommendations are now shown in the dedicated trigger-aware panel above the commentary feed.
+              Batting calls refresh only after wickets, while bowling calls refresh after completed overs once enough data
+              exists. This keeps the advice stable between events instead of churning every polling cycle.
+            </p>
+          </div>
         </div>
       ) : null}
     </section>

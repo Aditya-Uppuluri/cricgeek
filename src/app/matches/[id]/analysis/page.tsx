@@ -6,6 +6,7 @@ import EdaAskPanel from "@/components/matches/EdaAskPanel";
 import BattingLeadersTable from "@/components/matches/BattingLeadersTable";
 import BowlingLeadersTable from "@/components/matches/BowlingLeadersTable";
 import InningsSummaryGrid from "@/components/matches/InningsSummaryGrid";
+import LiveEdaCharts from "@/components/matches/LiveEdaCharts";
 import PostMatchSignals from "@/components/matches/PostMatchSignals";
 import { getMatchInfo, getMatchScorecard } from "@/lib/cricket-api";
 import { buildPostMatchEdaReport } from "@/lib/eda/post-match";
@@ -16,7 +17,8 @@ type PageProps = {
 };
 
 export const runtime = "nodejs";
-export const revalidate = 60;
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const { id } = await params;
@@ -46,6 +48,7 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
 
   const report = await buildPostMatchEdaReport(match, scorecards);
   const intel = report.intel;
+  const retrospective = report.retrospective;
   const isReportReady = match.matchEnded && intel.inningsSummaries.length > 0;
   const { commentarySession, blogs, coverageAvailable } = coverage;
 
@@ -98,6 +101,65 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
       </div>
 
       <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+        <h2 className="text-lg font-bold text-white">Retrospective Summary</h2>
+        <p className="mt-2 max-w-4xl text-sm leading-7 text-gray-300">{retrospective.summary}</p>
+        <div className="mt-5">
+          <EdaCards cards={retrospective.matchSummaryCards} />
+        </div>
+        {retrospective.warnings.length > 0 ? (
+          <div className="mt-4 space-y-2">
+            {retrospective.warnings.map((warning) => (
+              <p key={warning} className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
+                {warning}
+              </p>
+            ))}
+          </div>
+        ) : null}
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+          <h2 className="text-lg font-bold text-white">Batting Analysis</h2>
+          <p className="mt-1 text-sm text-gray-400">Tempo, shape, and pressure conversion from the decisive innings.</p>
+          <div className="mt-5">
+            <EdaCards cards={retrospective.battingCards} />
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+          <h2 className="text-lg font-bold text-white">Bowling Analysis</h2>
+          <p className="mt-1 text-sm text-gray-400">Control overs, wicket clusters, and the most damaging leaks.</p>
+          <div className="mt-5">
+            <EdaCards cards={retrospective.bowlingCards} />
+          </div>
+        </div>
+      </div>
+
+      {retrospective.analytics ? (
+        <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+          <h2 className="text-lg font-bold text-white">Win Probability Retrospective</h2>
+          <p className="mt-1 text-sm text-gray-400">
+            Reconstructed from the tracked final-innings live stream. The replay focuses on the provider&apos;s last available innings feed.
+          </p>
+          <div className="mt-5">
+            <LiveEdaCharts
+              analytics={retrospective.analytics}
+              ballsTracked={retrospective.ballsTracked}
+              completedOvers={Math.max(Math.floor(match.score[match.score.length - 1]?.o ?? 0), 0)}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+        <h2 className="text-lg font-bold text-white">Advanced Cards</h2>
+        <p className="mt-1 text-sm text-gray-400">Clutch performers, expected-vs-actual delta, tactical leaks, and matchup wins.</p>
+        <div className="mt-5">
+          <EdaCards cards={retrospective.advancedCards} />
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
         <h2 className="text-lg font-bold text-white">Innings Fingerprints</h2>
         <p className="mt-1 text-sm text-gray-400">A per-innings EDA read of where the runs came from and how concentrated the batting effort was.</p>
         <div className="mt-5">
@@ -122,6 +184,21 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
             <h2 className="text-lg font-bold text-white">Tactical Takeaways</h2>
             <ul className="mt-4 space-y-3 text-sm text-gray-300">
               {intel.tacticalTakeaways.map((item) => (
+                <li key={item} className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+                  {item}
+                </li>
+              ))}
+              </ul>
+            </div>
+
+          <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+            <h2 className="text-lg font-bold text-white">Recommendation Review</h2>
+            <p className="mt-1 text-sm text-gray-400">Production engine calibration and trust notes for the current recommendation stack.</p>
+            <div className="mt-4">
+              <EdaCards cards={retrospective.recommendationReviewCards} />
+            </div>
+            <ul className="mt-4 space-y-3 text-sm text-gray-300">
+              {retrospective.recommendationReviewNotes.map((item) => (
                 <li key={item} className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
                   {item}
                 </li>
@@ -156,6 +233,24 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
                 </li>
               ))}
             </ul>
+          </div>
+
+          <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
+            <h2 className="text-lg font-bold text-white">Final Ratings</h2>
+            <div className="mt-4 space-y-3">
+              {retrospective.ratings.map((rating) => (
+                <div key={rating.label} className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-white">{rating.label}</p>
+                    <p className="text-lg font-black text-cg-green">{Math.round(rating.score)}</p>
+                  </div>
+                  <div className="mt-3 h-2 rounded-full bg-white/5">
+                    <div className="h-full rounded-full bg-cg-green" style={{ width: `${Math.min(100, rating.score)}%` }} />
+                  </div>
+                  <p className="mt-2 text-sm text-gray-400">{rating.insight}</p>
+                </div>
+              ))}
+            </div>
           </div>
 
           <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
@@ -228,7 +323,7 @@ export default async function MatchAnalysisPage({ params }: PageProps) {
           <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
             <h2 className="text-lg font-bold text-white">Reporting Notes</h2>
             <ul className="mt-4 space-y-3 text-sm text-gray-300">
-              {intel.reportNotes.map((item) => (
+              {[...intel.reportNotes, ...retrospective.biggestSwings].map((item) => (
                 <li key={item} className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-3">
                   {item}
                 </li>
