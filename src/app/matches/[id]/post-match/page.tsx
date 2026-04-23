@@ -1,8 +1,15 @@
-import MatchAnalysisPage, { generateMetadata as generateAnalysisMetadata } from "../analysis/page";
+import {
+  generateMatchAnalysisMetadata,
+  MatchAnalysisPageContent,
+  type MatchAnalysisPageProps,
+} from "../analysis/AnalysisPageContent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-export const generateMetadata = generateAnalysisMetadata;
 
-export default MatchAnalysisPage;
+export async function generateMetadata(props: MatchAnalysisPageProps) {
+  return generateMatchAnalysisMetadata(props);
+}
+
+export default MatchAnalysisPageContent;
