@@ -143,6 +143,8 @@ def run_backtesting(entries_with_perf, aggregated_df, bayes_results, sample_situ
         rank_sum = 0
         bayes_runs_list = []
         baseline_runs_list = []
+        actual_model_runs_list = []
+        actual_baseline_runs_list = []
         calibration_rows = []
         results = []
 
@@ -200,6 +202,8 @@ def run_backtesting(entries_with_perf, aggregated_df, bayes_results, sample_situ
             baseline_sorted = baseline_candidates.sort_values("career", ascending=False)
             baseline_top1 = baseline_sorted.index[0] if not baseline_sorted.empty else our_top1
             baseline_runs = float(career_avgs.get(baseline_top1, our_exp_runs))
+            our_actual_runs = test_sit.loc[test_sit["batsman"] == our_top1, "runs_after_entry"].mean()
+            baseline_actual_runs = test_sit.loc[test_sit["batsman"] == baseline_top1, "runs_after_entry"].mean()
 
             covered += 1
             p1 = actual_best == our_top1
@@ -211,13 +215,19 @@ def run_backtesting(entries_with_perf, aggregated_df, bayes_results, sample_situ
             rank_sum += rank
             bayes_runs_list.append(our_exp_runs)
             baseline_runs_list.append(baseline_runs)
+            if pd.notna(our_actual_runs) and pd.notna(baseline_actual_runs):
+                actual_model_runs_list.append(float(our_actual_runs))
+                actual_baseline_runs_list.append(float(baseline_actual_runs))
 
             inn_type = "Chasing" if any(x in sit for x in ["high", "medium", "low"]) else "Batting First"
 
             calibration_rows.append({
                 "situation_label": sit,
                 "mean_predicted": round(our_exp_runs, 4),
-                "mean_actual": round(actual_best_runs, 4),
+                "mean_actual": round(
+                    float(our_actual_runs) if pd.notna(our_actual_runs) else actual_best_runs,
+                    4,
+                ),
             })
             results.append({
                 "situation_label": sit,
@@ -227,14 +237,21 @@ def run_backtesting(entries_with_perf, aggregated_df, bayes_results, sample_situ
                 "p3_hit": p3,
                 "rank_of_best": rank,
                 "our_top_runs": our_exp_runs,
+                "our_actual_runs": round(float(our_actual_runs), 4) if pd.notna(our_actual_runs) else None,
                 "baseline_runs": baseline_runs,
+                "baseline_actual_runs": round(float(baseline_actual_runs), 4) if pd.notna(baseline_actual_runs) else None,
+                "actual_best_runs": round(actual_best_runs, 4),
             })
 
         if covered == 0:
             return BacktestResults()
 
-        bayes_mean = float(np.mean(bayes_runs_list))
-        baseline_mean = float(np.mean(baseline_runs_list))
+        if actual_model_runs_list and actual_baseline_runs_list:
+            bayes_mean = float(np.mean(actual_model_runs_list))
+            baseline_mean = float(np.mean(actual_baseline_runs_list))
+        else:
+            bayes_mean = float(np.mean(bayes_runs_list))
+            baseline_mean = float(np.mean(baseline_runs_list))
         improvement = ((bayes_mean - baseline_mean) / max(baseline_mean, 1)) * 100
 
         # Pearson correlation between predicted and actual

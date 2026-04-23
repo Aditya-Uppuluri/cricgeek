@@ -9,6 +9,21 @@ import pandas as pd
 from typing import Optional
 
 
+def _weighted_mean(df: pd.DataFrame, value_column: str) -> float:
+    if df.empty or value_column not in df.columns:
+        return 0.0
+
+    values = pd.to_numeric(df[value_column], errors="coerce")
+    if "entry_count" in df.columns:
+        weights = pd.to_numeric(df["entry_count"], errors="coerce").fillna(0)
+        mask = values.notna() & weights.gt(0)
+        if mask.any():
+            return float(np.average(values[mask], weights=weights[mask]))
+
+    valid = values.dropna()
+    return float(valid.mean()) if not valid.empty else 0.0
+
+
 def phase_dominance_index(
     player_avg: float,
     global_avg: float,
@@ -50,8 +65,8 @@ def pressure_performance_score(
     pressure_rows = player_rows[
         player_rows["situation_label"].str.contains("3-4|5\\+", regex=True)
     ]
-    overall_avg = player_rows["avg_runs_after_entry"].mean()
-    pressure_avg = pressure_rows["avg_runs_after_entry"].mean() if not pressure_rows.empty else overall_avg
+    overall_avg = _weighted_mean(player_rows, "avg_runs_after_entry")
+    pressure_avg = _weighted_mean(pressure_rows, "avg_runs_after_entry") if not pressure_rows.empty else overall_avg
 
     if overall_avg <= 0:
         return 1.0
@@ -191,7 +206,10 @@ def compute_global_phase_averages(aggregated_df: pd.DataFrame) -> dict:
     """
     agg = aggregated_df.copy()
     agg["phase"] = agg["situation_label"].str.split("|").str[0]
-    result = agg.groupby("phase")["avg_runs_after_entry"].mean().to_dict()
+    result = {
+        phase: _weighted_mean(phase_rows, "avg_runs_after_entry")
+        for phase, phase_rows in agg.groupby("phase")
+    }
     return result
 
 

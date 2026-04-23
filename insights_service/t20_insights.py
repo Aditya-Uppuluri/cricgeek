@@ -132,6 +132,169 @@ def _clean_number(value: Any) -> Optional[float]:
     return number
 
 
+NON_DISMISSAL_STATUSES = {
+    "",
+    "batting",
+    "did not bat",
+    "not out",
+    "retired hurt",
+}
+
+
+def _weighted_mean(df: pd.DataFrame, value_column: str, weight_column: str = "entry_count") -> Optional[float]:
+    if df.empty or value_column not in df.columns:
+        return None
+
+    values = pd.to_numeric(df[value_column], errors="coerce")
+    if weight_column in df.columns:
+        weights = pd.to_numeric(df[weight_column], errors="coerce").fillna(0)
+        mask = values.notna() & weights.gt(0)
+        if mask.any():
+            return float(np.average(values[mask], weights=weights[mask]))
+
+    valid = values.dropna()
+    if valid.empty:
+        return None
+    return float(valid.mean())
+
+
+def _dismissal_status_mask(series: pd.Series) -> pd.Series:
+    normalized = series.fillna("").astype(str).str.strip().str.lower()
+    return normalized.ne("") & ~normalized.isin(NON_DISMISSAL_STATUSES)
+
+
+def _dismissal_metrics_reliable(entries_with_perf: pd.DataFrame, aggregated_df: pd.DataFrame) -> bool:
+    if not entries_with_perf.empty and "dismissal_status" in entries_with_perf.columns:
+        dismissed = _dismissal_status_mask(entries_with_perf["dismissal_status"])
+        if bool(dismissed.any()):
+            return True
+
+    if not aggregated_df.empty and "dismissal_probability" in aggregated_df.columns:
+        return int(aggregated_df["dismissal_probability"].dropna().nunique()) > 1
+
+    return False
+
+
+def _confidence_tier(sample_size: int, medium: int = 5, high: int = 20) -> str:
+    if sample_size >= high:
+        return "high"
+    if sample_size >= medium:
+        return "medium"
+    return "low"
+
+
+def _sample_warning(
+    sample_size: int,
+    medium: int = 5,
+    high: int = 20,
+    noun: str = "observations",
+) -> Optional[str]:
+    if sample_size >= high:
+        return None
+    if sample_size >= medium:
+        return f"Moderate evidence only: based on {sample_size} comparable {noun}."
+    if sample_size > 0:
+        return f"Low-data estimate: based on just {sample_size} comparable {noun}."
+    return f"No comparable {noun} were available."
+
+
+def _shrink_mean(
+    observed: Optional[float],
+    sample_size: int,
+    prior_mean: float,
+    prior_strength: float,
+) -> Optional[float]:
+    if observed is None:
+        return float(prior_mean)
+    if sample_size <= 0:
+        return float(prior_mean)
+    return float(
+        (observed * sample_size + prior_mean * prior_strength)
+        / (sample_size + prior_strength)
+    )
+
+
+def _shrink_rate(
+    observed: Optional[float],
+    sample_size: int,
+    prior_rate: float,
+    prior_strength: float,
+) -> Optional[float]:
+    if observed is None:
+        return float(prior_rate)
+    if sample_size <= 0:
+        return float(prior_rate)
+    prior_successes = max(0.0, min(1.0, prior_rate)) * prior_strength
+    return float(
+        (observed * sample_size + prior_successes)
+        / (sample_size + prior_strength)
+    )
+
+
+def _predictive_interval(
+    center: Optional[float],
+    sd: Optional[float],
+    z: float = 1.28,
+    label: str = "80% range",
+    unit: Optional[str] = None,
+    decimals: int = 1,
+) -> Optional[dict[str, Any]]:
+    if center is None or sd is None:
+        return None
+    if not math.isfinite(center) or not math.isfinite(sd) or sd < 0:
+        return None
+    lower = round(max(0.0, center - z * sd), decimals)
+    upper = round(center + z * sd, decimals)
+    return {
+        "label": label,
+        "lower": lower,
+        "upper": upper,
+        "unit": unit,
+        "decimals": decimals,
+    }
+
+
+def _wilson_interval(
+    successes: int,
+    total: int,
+    z: float = 1.96,
+    decimals: int = 1,
+) -> Optional[dict[str, Any]]:
+    if total <= 0:
+        return None
+
+    p_hat = max(0.0, min(1.0, successes / total))
+    z2 = z ** 2
+    denominator = 1 + z2 / total
+    center = (p_hat + z2 / (2 * total)) / denominator
+    margin = (z / denominator) * math.sqrt(
+        (p_hat * (1 - p_hat)) / total + z2 / (4 * total ** 2)
+    )
+    return {
+        "label": "95% CI",
+        "lower": round(max(0.0, center - margin) * 100, decimals),
+        "upper": round(min(1.0, center + margin) * 100, decimals),
+        "unit": "%",
+        "decimals": decimals,
+    }
+
+
+def _metric_support(
+    sample_size: int,
+    *,
+    medium: int = 5,
+    high: int = 20,
+    warning: Optional[str] = None,
+    uncertainty: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    return {
+        "sampleSize": int(max(sample_size, 0)),
+        "confidenceTier": _confidence_tier(int(max(sample_size, 0)), medium=medium, high=high),
+        "warning": warning,
+        "uncertainty": uncertainty,
+    }
+
+
 def _serialize_records(df: pd.DataFrame, limit: Optional[int] = None) -> list[dict[str, Any]]:
     if df is None or df.empty:
         return []
@@ -392,9 +555,10 @@ def load_t20_artifacts() -> dict[str, Any]:
         except Exception as exc:
             raise T20InsightsUnavailable(str(exc)) from exc
 
-    aggregated_df = artifacts.get("aggregated_df", pd.DataFrame()).copy()
-    filtered_df = artifacts.get("filtered_df", pd.DataFrame()).copy()
-    bowling_over_df = artifacts.get("bowling_over_df", pd.DataFrame()).copy()
+    aggregated_df = artifacts.get("aggregated_df", pd.DataFrame()).copy().drop_duplicates()
+    filtered_df = artifacts.get("filtered_df", pd.DataFrame()).copy().drop_duplicates()
+    bowling_over_df = artifacts.get("bowling_over_df", pd.DataFrame()).copy().drop_duplicates()
+    entries_with_perf = artifacts.get("entries_with_perf", pd.DataFrame()).copy().drop_duplicates()
 
     player_gender_map = _load_optional_pickle("player_gender_map.pkl", {})
     player_image_urls = _load_optional_json("player_image_urls.json", {})
@@ -416,10 +580,30 @@ def load_t20_artifacts() -> dict[str, Any]:
     artifacts["aggregated_df"] = aggregated_df
     artifacts["filtered_df"] = filtered_df
     artifacts["bowling_over_df"] = bowling_over_df
+    artifacts["entries_with_perf"] = entries_with_perf
     artifacts["player_gender_map"] = player_gender_map
     artifacts["player_image_urls"] = player_image_urls if isinstance(player_image_urls, dict) else {}
     artifacts["team_to_players"] = team_to_players
     artifacts["player_to_team"] = derived_player_to_team
+    artifacts["dismissal_metrics_reliable"] = _dismissal_metrics_reliable(
+        entries_with_perf,
+        aggregated_df,
+    )
+    if artifacts["dismissal_metrics_reliable"]:
+        global_dismissal_rate = None
+        if not entries_with_perf.empty and "dismissal_status" in entries_with_perf.columns:
+            dismissed = _dismissal_status_mask(entries_with_perf["dismissal_status"])
+            if not dismissed.empty:
+                global_dismissal_rate = float(dismissed.mean())
+        if global_dismissal_rate is None:
+            global_dismissal_rate = _weighted_mean(aggregated_df, "dismissal_probability")
+        artifacts["global_dismissal_rate"] = (
+            float(global_dismissal_rate)
+            if global_dismissal_rate is not None
+            else 0.25
+        )
+    else:
+        artifacts["global_dismissal_rate"] = 0.25
 
     if not aggregated_df.empty and "batsman" in aggregated_df.columns:
         total_entries = (
@@ -580,19 +764,21 @@ def get_batting_recommendations(
         sit_rows = pool.copy()
         context = "global"
 
-    agg_cols: dict[str, tuple[str, str]] = {
-        "avg_runs": ("avg_runs_after_entry", "mean"),
-        "dismiss_prob": ("dismissal_probability", "mean"),
-        "entry_count": ("entry_count", "sum"),
-    }
-    if "avg_strike_rate_after_entry" in sit_rows.columns:
-        agg_cols["avg_sr"] = ("avg_strike_rate_after_entry", "mean")
-    if "median_runs_after_entry" in sit_rows.columns:
-        agg_cols["median_runs"] = ("median_runs_after_entry", "mean")
-
     player_stats = (
-        sit_rows.groupby("batsman")
-        .agg(**agg_cols)
+        sit_rows.groupby("batsman", dropna=False)
+        .apply(
+            lambda group: pd.Series({
+                "avg_runs": _weighted_mean(group, "avg_runs_after_entry"),
+                "dismiss_prob": _weighted_mean(group, "dismissal_probability"),
+                "entry_count": pd.to_numeric(group.get("entry_count"), errors="coerce").fillna(0).sum(),
+                "avg_sr": _weighted_mean(group, "avg_strike_rate_after_entry")
+                if "avg_strike_rate_after_entry" in group.columns
+                else None,
+                "median_runs": _weighted_mean(group, "median_runs_after_entry")
+                if "median_runs_after_entry" in group.columns
+                else None,
+            })
+        )
         .reset_index()
         .sort_values(["avg_runs", "entry_count"], ascending=[False, False])
         .head(max(top_n * 6, 30))
@@ -601,6 +787,10 @@ def get_batting_recommendations(
     phase = situation_label.split("|")[0]
     phase_avgs = compute_global_phase_averages(pool if not pool.empty else artifacts["aggregated_df"])
     global_phase_avg = float(phase_avgs.get(phase, 20.0))
+    global_sr_prior = (
+        _weighted_mean(sit_rows if not sit_rows.empty else pool, "avg_strike_rate_after_entry")
+        or 110.0
+    )
     peer_exp_avg = float(player_stats["avg_runs"].mean()) if not player_stats.empty else 20.0
 
     bayes_lookup: dict[str, dict[str, Any]] = {}
@@ -630,15 +820,48 @@ def get_batting_recommendations(
     player_to_team = artifacts.get("player_to_team", {})
     player_image_urls = artifacts.get("player_image_urls", {})
     overall_agg = artifacts.get("aggregated_df", pd.DataFrame())
+    dismissal_metrics_reliable = bool(artifacts.get("dismissal_metrics_reliable"))
+    global_dismissal_rate = float(artifacts.get("global_dismissal_rate", 0.25))
 
     for _, row in player_stats.iterrows():
         batsman = str(row["batsman"])
         model_row = bayes_lookup.get(batsman, {})
 
-        exp_runs = _clean_number(model_row.get("exp_runs")) or _clean_number(row.get("avg_runs")) or 15.0
-        sit_sr = _clean_number(row.get("avg_sr")) or 0.0
-        p_out = _clean_number(model_row.get("p_out")) or _clean_number(row.get("dismiss_prob")) or 0.25
         entry_count = int(_clean_number(row.get("entry_count")) or 0)
+        if entry_count < 2:
+            continue
+
+        observed_avg_runs = _clean_number(row.get("avg_runs")) or global_phase_avg
+        model_exp_runs = _clean_number(model_row.get("exp_runs"))
+        exp_runs = model_exp_runs if model_exp_runs is not None else _shrink_mean(
+            observed_avg_runs,
+            entry_count,
+            global_phase_avg,
+            10.0 if context == "exact" else 14.0,
+        )
+        if exp_runs is None:
+            exp_runs = global_phase_avg
+
+        sit_sr = _shrink_mean(
+            _clean_number(row.get("avg_sr")),
+            entry_count,
+            global_sr_prior,
+            10.0,
+        ) or 0.0
+        p_out = _clean_number(model_row.get("p_out"))
+        dismissal_warning = None
+        if p_out is None and dismissal_metrics_reliable:
+            p_out = _shrink_rate(
+                _clean_number(row.get("dismiss_prob")),
+                entry_count,
+                global_dismissal_rate,
+                12.0,
+            )
+        if p_out is None:
+            p_out = global_dismissal_rate
+            dismissal_warning = (
+                "Dismissal artifacts are incomplete right now, so a conservative population prior is being used."
+            )
 
         player_rows = overall_agg[overall_agg["batsman"] == batsman]
         sd_runs = _clean_number(model_row.get("sd_runs"))
@@ -652,15 +875,25 @@ def get_batting_recommendations(
             if not player_rows.empty
             else pd.DataFrame()
         )
+        phase_entry_count = int(
+            pd.to_numeric(phase_rows.get("entry_count"), errors="coerce").fillna(0).sum()
+        ) if not phase_rows.empty and "entry_count" in phase_rows.columns else 0
         player_phase_avg = (
-            float(phase_rows["avg_runs_after_entry"].mean())
+            _weighted_mean(phase_rows, "avg_runs_after_entry")
             if not phase_rows.empty
             else global_phase_avg
         )
+        if player_phase_avg is None:
+            player_phase_avg = global_phase_avg
+        player_phase_avg = _shrink_mean(player_phase_avg, phase_entry_count, global_phase_avg, 8.0) or global_phase_avg
 
         phase_dominance = phase_dominance_index(player_phase_avg, global_phase_avg)
         consistency = consistency_rating(exp_runs, sd_runs)
+        player_total_entries = int(
+            pd.to_numeric(player_rows.get("entry_count"), errors="coerce").fillna(0).sum()
+        ) if not player_rows.empty and "entry_count" in player_rows.columns else entry_count
         pressure_score = pressure_performance_score(overall_agg, batsman)
+        pressure_score = _shrink_mean(pressure_score, player_total_entries, 1.0, 12.0) or 1.0
         suitability = situation_suitability_score(
             exp_runs,
             sd_runs,
@@ -684,6 +917,23 @@ def get_batting_recommendations(
             strategy=strategy or "balanced",
             peer_exp_avg=peer_exp_avg,
         )
+        support_warning = dismissal_warning or _sample_warning(
+            entry_count,
+            medium=8,
+            high=20,
+            noun="entries",
+        )
+        support = _metric_support(
+            entry_count,
+            medium=8,
+            high=20,
+            warning=support_warning,
+            uncertainty=_predictive_interval(
+                exp_runs,
+                sd_runs,
+                label="80% xRuns range",
+            ),
+        )
 
         recs.append(
             {
@@ -702,6 +952,7 @@ def get_batting_recommendations(
                 "modelScore": _clean_number(model_row.get("score")),
                 "phase": phase,
                 "reasons": reasons,
+                "support": support,
             }
         )
 
@@ -816,6 +1067,22 @@ def get_bowling_recommendations(
         sd_runs_per_over = 6.0 * math.sqrt(alpha_r) / beta_r
 
         utility = wicket_weight * exp_wickets_per_over - containment_weight * exp_runs_per_over
+        support = _metric_support(
+            overs_sample,
+            medium=4,
+            high=10,
+            warning=_sample_warning(
+                overs_sample,
+                medium=4,
+                high=10,
+                noun="overs",
+            ),
+            uncertainty=_predictive_interval(
+                exp_runs_per_over,
+                sd_runs_per_over,
+                label="80% xRuns/ov range",
+            ),
+        )
         reasons = [
             f"{exp_wickets_per_over:.2f} expected wickets per over in comparable spells.",
             f"{exp_runs_per_over:.1f} expected runs conceded per over from {overs_sample} similar overs.",
@@ -833,6 +1100,7 @@ def get_bowling_recommendations(
                 "utilityScore": round(utility, 3),
                 "oversSample": overs_sample,
                 "reasons": reasons,
+                "support": support,
             }
         )
 
@@ -955,7 +1223,8 @@ def get_evaluation(sample_situations: int = 80) -> dict[str, Any]:
         calibration_df["calibrationGap"] = (
             calibration_df["mean_predicted"] - calibration_df["mean_actual"]
         )
-        calibration_df = calibration_df.sort_values("calibrationGap", ascending=False)
+        calibration_df["absoluteCalibrationGap"] = calibration_df["calibrationGap"].abs()
+        calibration_df = calibration_df.sort_values("absoluteCalibrationGap", ascending=False)
 
     if not backtest_df.empty:
         backtest_df = backtest_df.copy()
@@ -966,6 +1235,19 @@ def get_evaluation(sample_situations: int = 80) -> dict[str, Any]:
             ["p1_hit", "p3_hit", "rank_of_best"],
             ascending=[True, True, False],
         )
+
+    covered_situations = int(len(backtest_df)) if not backtest_df.empty else 0
+    attempted_situations = int(
+        round(covered_situations / max(float(getattr(evaluation, "coverage", 0.0)), 1e-6))
+    ) if covered_situations > 0 and float(getattr(evaluation, "coverage", 0.0)) > 0 else covered_situations
+    top1_hits = int(pd.to_numeric(backtest_df.get("p1_hit"), errors="coerce").fillna(False).astype(bool).sum()) if not backtest_df.empty else 0
+    top3_hits = int(pd.to_numeric(backtest_df.get("p3_hit"), errors="coerce").fillna(False).astype(bool).sum()) if not backtest_df.empty else 0
+    evaluation_warning = _sample_warning(
+        covered_situations,
+        medium=25,
+        high=60,
+        noun="evaluated situations",
+    )
 
     return {
         "summary": {
@@ -979,8 +1261,13 @@ def get_evaluation(sample_situations: int = 80) -> dict[str, Any]:
             "improvementPct": round(float(getattr(evaluation, "improvement_pct", 0.0)), 2),
             "bayesMeanRuns": round(float(getattr(evaluation, "bayes_mean_runs", 0.0)), 2),
             "baselineMeanRuns": round(float(getattr(evaluation, "baseline_mean_runs", 0.0)), 2),
-            "sampleSituations": int(sample_situations),
+            "sampleSituations": attempted_situations or int(sample_situations),
             "cached": has_cached_metrics,
+            "top1Interval": _wilson_interval(top1_hits, covered_situations),
+            "top3Interval": _wilson_interval(top3_hits, covered_situations),
+            "coverageInterval": _wilson_interval(covered_situations, attempted_situations) if attempted_situations > 0 else None,
+            "confidenceTier": _confidence_tier(covered_situations, medium=25, high=60),
+            "warning": evaluation_warning,
         },
         "calibration": _serialize_records(calibration_df, limit=40),
         "situations": _serialize_records(backtest_df, limit=80),
@@ -1027,6 +1314,7 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
     artifacts = load_t20_artifacts()
     aggregated_df = artifacts.get("aggregated_df", pd.DataFrame())
     entries_with_perf = artifacts.get("entries_with_perf", pd.DataFrame())
+    dismissal_metrics_reliable = bool(artifacts.get("dismissal_metrics_reliable"))
 
     if aggregated_df.empty or "batsman" not in aggregated_df.columns:
         raise ValueError("Player explorer data is unavailable.")
@@ -1040,28 +1328,59 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
         canonical_player_name = matches[0]
         player_rows = aggregated_df[aggregated_df["batsman"] == canonical_player_name].copy()
 
-    phase_avgs = (
-        player_rows.assign(phase=player_rows["situation_label"].str.split("|").str[0])
-        .groupby("phase")["entry_count"]
-        .sum()
-    )
-    strongest_phase = phase_avgs.idxmax() if not phase_avgs.empty else None
-
     pdi_by_phase: dict[str, Optional[float]] = {}
+    phase_entry_counts: dict[str, int] = {}
+    phase_support: dict[str, dict[str, Any]] = {}
     from cricket_metrics import compute_global_phase_averages
 
     global_phase_avgs = compute_global_phase_averages(aggregated_df)
+    global_runs_prior = _weighted_mean(aggregated_df, "avg_runs_after_entry") or 20.0
+    global_sr_prior = _weighted_mean(aggregated_df, "avg_strike_rate_after_entry") or 110.0
     for phase in ("Powerplay", "Middle", "Death"):
         phase_rows = player_rows[player_rows["situation_label"].str.startswith(phase)]
+        phase_entry_counts[phase] = int(
+            pd.to_numeric(phase_rows.get("entry_count"), errors="coerce").fillna(0).sum()
+        ) if "entry_count" in phase_rows.columns else int(len(phase_rows))
         if phase_rows.empty:
             pdi_by_phase[phase] = None
             continue
-        player_phase_avg = float(phase_rows["avg_runs_after_entry"].mean())
+        player_phase_avg = _weighted_mean(phase_rows, "avg_runs_after_entry")
+        if player_phase_avg is None:
+            pdi_by_phase[phase] = None
+            continue
         global_phase_avg = float(global_phase_avgs.get(phase, player_phase_avg or 1.0))
+        shrunk_phase_avg = _shrink_mean(
+            player_phase_avg,
+            phase_entry_counts[phase],
+            global_phase_avg,
+            8.0,
+        )
         pdi_by_phase[phase] = round(
-            player_phase_avg / global_phase_avg,
+            (shrunk_phase_avg or global_phase_avg) / global_phase_avg,
             2,
         ) if global_phase_avg else None
+        phase_support[phase] = _metric_support(
+            phase_entry_counts[phase],
+            medium=5,
+            high=15,
+            warning=_sample_warning(
+                phase_entry_counts[phase],
+                medium=5,
+                high=15,
+                noun=f"{phase.lower()} entries",
+            ),
+        )
+
+    strongest_phase_candidates = [
+        (phase, score, phase_entry_counts.get(phase, 0))
+        for phase, score in pdi_by_phase.items()
+        if score is not None and phase_entry_counts.get(phase, 0) >= 5
+    ]
+    strongest_phase = (
+        max(strongest_phase_candidates, key=lambda item: (item[1], item[2]))[0]
+        if strongest_phase_candidates
+        else None
+    )
 
     entry_rows = (
         entries_with_perf[entries_with_perf["batsman"] == canonical_player_name].copy()
@@ -1069,11 +1388,51 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
         else pd.DataFrame()
     )
     dismissal_rate = None
-    if not entry_rows.empty and "dismissal_status" in entry_rows.columns:
-        dismissal_rate = round(
-            float((entry_rows["dismissal_status"].astype(str).str.lower() == "out").mean()),
-            3,
+    if dismissal_metrics_reliable and not entry_rows.empty and "dismissal_status" in entry_rows.columns:
+        dismissed = _dismissal_status_mask(entry_rows["dismissal_status"])
+        if not dismissed.empty:
+            dismissal_rate = round(float(dismissed.mean()), 3)
+    elif dismissal_metrics_reliable and "dismissal_probability" in player_rows.columns:
+        dismissal_rate_value = _weighted_mean(player_rows, "dismissal_probability")
+        dismissal_rate = round(float(dismissal_rate_value), 3) if dismissal_rate_value is not None else None
+
+    avg_expected_runs_raw = _weighted_mean(player_rows, "avg_runs_after_entry")
+    avg_situation_strike_rate_raw = _weighted_mean(player_rows, "avg_strike_rate_after_entry")
+    total_entries = int(player_rows["entry_count"].sum()) if "entry_count" in player_rows.columns else 0
+    avg_expected_runs = _shrink_mean(avg_expected_runs_raw, total_entries, global_runs_prior, 12.0)
+    avg_situation_strike_rate = _shrink_mean(
+        avg_situation_strike_rate_raw,
+        total_entries,
+        global_sr_prior,
+        12.0,
+    )
+    player_runs_std = _weighted_mean(player_rows, "runs_std")
+    summary_support = _metric_support(
+        total_entries,
+        medium=10,
+        high=40,
+        warning=_sample_warning(total_entries, medium=10, high=40, noun="entries"),
+        uncertainty=_predictive_interval(
+            avg_expected_runs,
+            player_runs_std,
+            label="80% xRuns range",
+        ),
+    )
+    dismissal_support = (
+        _metric_support(
+            total_entries,
+            medium=10,
+            high=40,
+            warning=None,
         )
+        if dismissal_metrics_reliable
+        else _metric_support(
+            0,
+            medium=10,
+            high=40,
+            warning="Dismissal metrics are suppressed because the artifact pipeline does not contain trustworthy wicket outcomes yet.",
+        )
+    )
 
     summary = {
         "player": canonical_player_name,
@@ -1081,15 +1440,15 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
         "team": artifacts.get("player_to_team", {}).get(canonical_player_name),
         "imageUrl": artifacts.get("player_image_urls", {}).get(canonical_player_name),
         "situations": int(len(player_rows)),
-        "avgExpectedRuns": round(float(player_rows["avg_runs_after_entry"].mean()), 1),
-        "totalEntries": int(player_rows["entry_count"].sum()) if "entry_count" in player_rows.columns else 0,
+        "avgExpectedRuns": round(float(avg_expected_runs), 1) if avg_expected_runs is not None else 0.0,
+        "totalEntries": total_entries,
         "dismissalRate": dismissal_rate,
-        "avgSituationStrikeRate": round(
-            float(player_rows["avg_strike_rate_after_entry"].mean()),
-            1,
-        ) if "avg_strike_rate_after_entry" in player_rows.columns else None,
+        "avgSituationStrikeRate": round(float(avg_situation_strike_rate), 1) if avg_situation_strike_rate is not None else None,
         "strongestPhase": strongest_phase,
         "pdiByPhase": pdi_by_phase,
+        "support": summary_support,
+        "dismissalSupport": dismissal_support,
+        "phaseSupport": phase_support,
     }
 
     profile_columns = [
@@ -1100,13 +1459,47 @@ def get_player_explorer(player_name: str) -> dict[str, Any]:
         "median_runs_after_entry",
         "avg_strike_rate_after_entry",
         "dismissal_probability",
+        "runs_std",
     ]
     available_columns = [column for column in profile_columns if column in player_rows.columns]
     profile_rows = player_rows[available_columns].copy()
+    if not dismissal_metrics_reliable and "dismissal_probability" in profile_rows.columns:
+        profile_rows["dismissal_probability"] = None
+    if "avg_runs_after_entry" in profile_rows.columns:
+        profile_rows["avg_runs_after_entry"] = profile_rows.apply(
+            lambda row: _shrink_mean(
+                _clean_number(row.get("avg_runs_after_entry")),
+                int(_clean_number(row.get("entry_count")) or 0),
+                global_runs_prior,
+                8.0,
+            ),
+            axis=1,
+        )
+    profile_rows["support"] = profile_rows.apply(
+        lambda row: _metric_support(
+            int(_clean_number(row.get("entry_count")) or 0),
+            medium=5,
+            high=15,
+            warning=_sample_warning(
+                int(_clean_number(row.get("entry_count")) or 0),
+                medium=5,
+                high=15,
+                noun="entries",
+            ),
+            uncertainty=_predictive_interval(
+                _clean_number(row.get("avg_runs_after_entry")),
+                _clean_number(row.get("runs_std")),
+                label="80% xRuns range",
+            ),
+        ),
+        axis=1,
+    )
     profile_rows = profile_rows.sort_values(
         ["avg_runs_after_entry", "entry_count"],
         ascending=[False, False],
     )
+    if "runs_std" in profile_rows.columns:
+        profile_rows = profile_rows.drop(columns=["runs_std"])
     profile_rows = profile_rows.replace({np.nan: None})
 
     return {

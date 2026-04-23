@@ -4,6 +4,7 @@ import {
   inferPhase,
   buildConfidence,
   buildFreshness,
+  buildMetricQuality,
   dedupeSources,
   clamp,
   round,
@@ -12,7 +13,6 @@ import {
 import { buildLiveAnalyticsBundle } from "@/lib/eda/live-analytics";
 import { getVenueSnapshot } from "@/lib/eda/historical";
 import {
-  computeBayesianWinProbability,
   runProbabilityIndex,
   globalT20Prior,
   type WinProbabilityPrior,
@@ -22,6 +22,29 @@ import type { InsightsAdvisorResponse } from "@/types/insights";
 import type { LiveEdaReport, LivePressureSnapshot } from "@/types/eda";
 
 export const LIVE_EDA_POLL_INTERVAL_SECONDS = 15;
+
+function liveModelConfidence(priorSampleSize: number, ballsTracked: number, options?: { strict?: boolean }) {
+  const evidence = Math.min(Math.max(priorSampleSize, 0), 24) + Math.min(Math.max(ballsTracked, 0), 24);
+  const highCut = options?.strict ? 30 : 24;
+  const mediumCut = options?.strict ? 16 : 12;
+
+  if (evidence >= highCut) return "high" as const;
+  if (evidence >= mediumCut) return "medium" as const;
+  return "low" as const;
+}
+
+function liveModelWarning(label: string, priorSampleSize: number, ballsTracked: number) {
+  if (priorSampleSize < 5 && ballsTracked < 12) {
+    return `${label} is leaning on a thin historical prior and limited live ball tracking.`;
+  }
+  if (priorSampleSize < 5) {
+    return `${label} is leaning more on the global T20 prior because venue history is thin.`;
+  }
+  if (ballsTracked < 12) {
+    return `${label} is still early and may move quickly as more live balls are tracked.`;
+  }
+  return null;
+}
 
 function isT20Match(match: Match) {
   return /t20/i.test(match.matchType);
@@ -164,20 +187,31 @@ export async function buildLiveEdaReport(
 ): Promise<LiveEdaReport> {
   const snapshot = deriveLivePressureSnapshot(match);
   const scheduledOvers = getScheduledOvers(match.matchType);
+  const fixedOvers = scheduledOvers ?? 20;
   const [venue, advisor, commentary, scorecards] = await Promise.all([
     getVenueSnapshot(match.venue, match.matchType),
     getAdvisor(match, snapshot),
     options.commentary !== undefined ? Promise.resolve(options.commentary) : getMatchCommentary(match.id, { fresh: options.fresh ?? true }),
     options.scorecards !== undefined ? Promise.resolve(options.scorecards) : getMatchScorecard(match.id, { fresh: options.fresh ?? true }),
   ]);
+  const ballsTracked = commentary?.bbb.length ?? 0;
 
   // Build win-probability prior from venue warehouse data
-  const winPrior: WinProbabilityPrior = {
-    priorWinPct: 52,
-    avgTarget: venue.avgFirstInningsScore,
-    chaseWinPct: venue.chaseWinPct,
-    sampleSize: venue.sampleSize,
-  };
+  const winPrior: WinProbabilityPrior =
+    (venue.chaseSampleSize ?? venue.sampleSize) >= 5
+      ? {
+          priorWinPct: 52,
+          avgTarget: venue.avgFirstInningsScore,
+          chaseWinPct: venue.chaseWinPct,
+          sampleSize: venue.chaseSampleSize ?? venue.sampleSize,
+        }
+      : globalT20Prior(venue.chaseWinPct);
+  if (venue.avgFirstInningsScore !== null) {
+    winPrior.avgTarget = venue.avgFirstInningsScore;
+  }
+  if (venue.chaseWinPct !== null) {
+    winPrior.chaseWinPct = venue.chaseWinPct;
+  }
   const analytics = buildLiveAnalyticsBundle({
     match,
     commentaryBalls: commentary?.bbb ?? [],
@@ -189,6 +223,9 @@ export async function buildLiveEdaReport(
   const topTurningBall = analytics.topTurningBalls[0];
   const boundaryPressure = analytics.boundaryPressure;
   const wp = analytics.winProbabilityDetail;
+  const winProbabilitySample = wp?.priorSampleSize ?? winPrior.sampleSize;
+  const winProbabilityConfidence = liveModelConfidence(winProbabilitySample, ballsTracked);
+  const secondaryModelConfidence = liveModelConfidence(winProbabilitySample, ballsTracked, { strict: true });
 
   // ── Run-Probability Index (RPI) ───────────────────────────────────────────
   const rpi = runProbabilityIndex(
@@ -197,7 +234,7 @@ export async function buildLiveEdaReport(
       runs: snapshot.runs,
       wickets: snapshot.wickets,
       overs: snapshot.overs,
-      scheduledOvers: scheduledOvers ?? 20,
+      scheduledOvers: fixedOvers,
       target: snapshot.target,
       currentRunRate: snapshot.currentRunRate,
       requiredRunRate: snapshot.requiredRunRate,
@@ -214,7 +251,7 @@ export async function buildLiveEdaReport(
       id: "win-probability",
       label: "Win probability",
       value: wp ? `${wp.probability}%` : "—",
-      subValue: wp ? `CI95: ${wp.ci95[0]}–${wp.ci95[1]}%` : undefined,
+      subValue: wp ? `${wp.priorSampleSize} prior matches · ${ballsTracked} balls tracked` : undefined,
       insight: wp
         ? `${snapshot.battingTeam} have a ${wp.probability}% chance of winning (Bayesian model, ${wp.priorSampleSize} historical matches anchoring the prior). ` +
           `Resources remaining: ${wp.resourcePct}%, expected ${wp.expectedRunsRemaining} more runs from this position. ` +
@@ -231,6 +268,21 @@ export async function buildLiveEdaReport(
         : wp.probability <= 35 ? "warning" as const
         : "neutral" as const
         : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: winProbabilitySample,
+        provenance: "modeled",
+        confidence: winProbabilityConfidence,
+        warning: liveModelWarning("Win probability", winProbabilitySample, ballsTracked),
+        uncertainty: wp
+          ? {
+              label: "95% CI",
+              lower: wp.ci95[0],
+              upper: wp.ci95[1],
+              unit: "%",
+              decimals: 0,
+            }
+          : null,
+      }),
     },
     // ── Card 2: DLS Resources ───────────────────────────────────────────────
     {
@@ -242,19 +294,29 @@ export async function buildLiveEdaReport(
         `(${Math.max(0, (scheduledOvers ?? 20) - snapshot.overs).toFixed(1)} overs, ${10 - snapshot.wickets} wickets). ` +
         (wp ? `Expected ${wp.expectedRunsRemaining} more runs from this resource state.` : ""),
       tone: (wp?.resourcePct ?? analytics.resourcePct) >= 50 ? "good" as const : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: 10 - snapshot.wickets,
+        provenance: "observed",
+      }),
     },
     // ── Card 3: Run-Probability Index ─────────────────────────────────────────
     {
       id: "rpi",
-      label: "Run-probability index",
+      label: "State advantage index",
       value: `${rpi}`,
       insight:
         rpi >= 60
-          ? `RPI ${rpi}/100 — ${snapshot.battingTeam} are tracking above par considering wickets, resources, and current tempo.`
+          ? `Model-derived state score ${rpi}/100 — ${snapshot.battingTeam} are tracking above par when wickets, resources, and current tempo are blended together.`
           : rpi <= 40
-            ? `RPI ${rpi}/100 — the fielding side holds the balance; a wicket or two could decide this match.`
-            : `RPI ${rpi}/100 — this match is evenly poised; small state changes will swing it decisively.`,
+            ? `Model-derived state score ${rpi}/100 — the fielding side holds the balance; a wicket or two could decide this match.`
+            : `Model-derived state score ${rpi}/100 — this match is evenly poised; small state changes will swing it decisively.`,
       tone: rpi >= 60 ? "good" as const : rpi <= 40 ? "warning" as const : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: winProbabilitySample,
+        provenance: "modeled",
+        confidence: secondaryModelConfidence,
+        warning: "Secondary derived state score; use win probability as the primary calibrated model output.",
+      }),
     },
     // ── Card 4: Entropy Momentum ────────────────────────────────────────────────
     {
@@ -268,6 +330,12 @@ export async function buildLiveEdaReport(
             ? `Batting momentum is suppressed (${analytics.entropyMomentum}/100) — the bowling side is applying effective control through dot balls and low-value deliveries.`
             : `Batting momentum is neutral (${analytics.entropyMomentum}/100) — neither side has established a clear tempo advantage in the last 4 overs.`,
       tone: analytics.entropyMomentum >= 60 ? "good" as const : analytics.entropyMomentum <= 40 ? "warning" as const : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: Math.min(ballsTracked, 24),
+        provenance: "modeled",
+        confidence: liveModelConfidence(0, ballsTracked, { strict: true }),
+        warning: ballsTracked < 12 ? "Momentum is based on fewer than 12 tracked balls." : null,
+      }),
     },
     // ── Card 5: Wicket-Cascade Risk ────────────────────────────────────────────
     {
@@ -281,6 +349,12 @@ export async function buildLiveEdaReport(
             ? `Low cascade risk (${analytics.wicketCascadeRisk}%) — scoring is fluid and dismissals have been spread across the innings so far.`
             : `Moderate cascade risk (${analytics.wicketCascadeRisk}%) — the match could pivot quickly if a wicket falls in the next over.`,
       tone: analytics.wicketCascadeRisk >= 40 ? "warning" as const : analytics.wicketCascadeRisk <= 15 ? "good" as const : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: Math.min(ballsTracked, 12),
+        provenance: "modeled",
+        confidence: liveModelConfidence(0, ballsTracked, { strict: true }),
+        warning: ballsTracked < 12 ? "Collapse risk is based on a very short live window." : null,
+      }),
     },
     // ── Card 6: Death-Over Forecast ─────────────────────────────────────────────
     analytics.deathOverForecast !== null
@@ -293,6 +367,20 @@ export async function buildLiveEdaReport(
             `(confidence ${analytics.deathOverForecast.confidence}%), based on ${10 - snapshot.wickets} wickets in hand ` +
             `and recent scoring momentum.`,
           tone: analytics.deathOverForecast.projectedDeathRuns >= 50 ? "good" as const : "neutral" as const,
+          quality: buildMetricQuality({
+            sampleSize: Math.min(ballsTracked, 18),
+            provenance: "modeled",
+            confidence:
+              snapshot.overs >= fixedOvers * 0.6
+                ? liveModelConfidence(0, ballsTracked)
+                : "low",
+            warning:
+              snapshot.overs < fixedOvers * 0.6
+                ? "Long-range death forecast; confidence improves materially once the innings gets deeper."
+                : ballsTracked < 12
+                  ? "Death forecast is based on a short recent scoring window."
+                  : null,
+          }),
         }
       : {
           id: "death-forecast",
@@ -300,6 +388,10 @@ export async function buildLiveEdaReport(
           value: "In death overs",
           insight: "Match is currently in the death phase — run tally updates after each delivery.",
           tone: "neutral" as const,
+          quality: buildMetricQuality({
+            sampleSize: Math.min(ballsTracked, 18),
+            provenance: "observed",
+          }),
         },
     // ── Legacy cards ─────────────────────────────────────────────────────────────
     {
@@ -308,6 +400,10 @@ export async function buildLiveEdaReport(
       value: `${snapshot.currentRunRate}`,
       insight: `${snapshot.battingTeam} are scoring at ${snapshot.currentRunRate} runs per over in the ${snapshot.phase.toLowerCase()}.`,
       tone: snapshot.currentRunRate >= 8 ? "good" as const : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: Math.max(Math.round(snapshot.overs * 6), 1),
+        provenance: "observed",
+      }),
     },
     {
       id: "pressure-index",
@@ -318,16 +414,12 @@ export async function buildLiveEdaReport(
           ? "The batting side is under strong scoreboard pressure."
           : "The current state is manageable, but one wicket can swing the pressure quickly.",
       tone: snapshot.pressureIndex >= 65 ? "warning" as const : "neutral" as const,
-    },
-    {
-      id: "momentum-index",
-      label: "Momentum",
-      value: `${snapshot.momentumIndex}`,
-      insight:
-        snapshot.momentumIndex >= 55
-          ? `${snapshot.battingTeam} hold the tempo edge in the current state.`
-          : `${snapshot.bowlingTeam || "The fielding side"} have enough control to keep this state live.`,
-      tone: snapshot.momentumIndex >= 55 ? "good" as const : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: Math.max(Math.round(snapshot.overs * 6), 1),
+        provenance: "modeled",
+        confidence: liveModelConfidence(winProbabilitySample, ballsTracked, { strict: true }),
+        warning: "Derived from current run rate, wickets, and target pressure rather than a separately calibrated classifier.",
+      }),
     },
     {
       id: "projection",
@@ -345,6 +437,17 @@ export async function buildLiveEdaReport(
             ? `A simple tempo-plus-wickets projection puts the innings around ${snapshot.projectedTotal}.`
             : `The chase trajectory currently points to roughly ${snapshot.projectedTotal} if the same tempo holds.`,
       tone: "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: Math.max(Math.round(snapshot.overs * 6), 1),
+        provenance: "modeled",
+        confidence: snapshot.overs >= (scheduledOvers ?? 20) * 0.6 ? "medium" : "low",
+        warning:
+          scheduledOvers === null
+            ? "Projection is intentionally conservative in non fixed-over formats."
+            : snapshot.overs < (scheduledOvers ?? 20) * 0.5
+              ? "Long-range tempo extrapolation; treat as directional rather than precise."
+              : null,
+      }),
     },
     {
       id: "required-rate",
@@ -358,6 +461,10 @@ export async function buildLiveEdaReport(
         snapshot.requiredRunRate !== null && snapshot.requiredRunRate > snapshot.currentRunRate + 1.2
           ? "warning" as const
           : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: snapshot.ballsRemaining ?? 0,
+        provenance: "observed",
+      }),
     },
     {
       id: "boundary-pressure",
@@ -376,6 +483,18 @@ export async function buildLiveEdaReport(
             ? "good" as const
             : "warning" as const
           : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: Math.min(ballsTracked, 12),
+        provenance: "modeled",
+        confidence: liveModelConfidence(0, ballsTracked, { strict: true }),
+        warning:
+          boundaryPressure === null
+            ? "Suppressed until enough tracked ball events are available."
+            : ballsTracked < 12
+              ? "Boundary-pressure forecast is based on fewer than 12 tracked balls."
+              : null,
+        suppressed: boundaryPressure === null,
+      }),
     },
     {
       id: "venue-par",
@@ -383,6 +502,16 @@ export async function buildLiveEdaReport(
       value: venue.avgFirstInningsScore !== null ? `${venue.avgFirstInningsScore}` : "Waiting",
       insight: venue.summary,
       tone: venue.avgFirstInningsScore !== null ? "good" as const : "neutral" as const,
+      subValue: venue.avgFirstInningsInterval
+        ? `${venue.avgFirstInningsInterval.label} ${venue.avgFirstInningsInterval.lower}–${venue.avgFirstInningsInterval.upper}`
+        : undefined,
+      quality: buildMetricQuality({
+        sampleSize: venue.sampleSize,
+        provenance: "historical",
+        confidence: venue.confidence,
+        warning: venue.warning,
+        uncertainty: venue.avgFirstInningsInterval ?? null,
+      }),
     },
   ];
 
@@ -424,7 +553,7 @@ export async function buildLiveEdaReport(
           : `${snapshot.battingTeam} are ${snapshot.runs}/${snapshot.wickets} after ${snapshot.overs} overs. Fixed-over projections are not applied in this format, so the live read leans on wickets, tempo, and venue context.`,
     advisor,
     pollIntervalSeconds: LIVE_EDA_POLL_INTERVAL_SECONDS,
-    ballsTracked: commentary?.bbb.length ?? 0,
+    ballsTracked,
     analytics,
     confidence: buildConfidence(
       45 +

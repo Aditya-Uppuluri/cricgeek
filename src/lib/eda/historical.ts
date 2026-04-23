@@ -8,7 +8,16 @@ import type {
   HistoricalVenueSnapshot,
 } from "@/types/eda";
 import type { Match, Squad } from "@/types/cricket";
-import { average, pct, round, warehouseMatchType } from "@/lib/eda/common";
+import {
+  average,
+  confidenceTierFromSample,
+  lowSampleWarning,
+  meanInterval,
+  pct,
+  round,
+  warehouseMatchType,
+  wilsonInterval,
+} from "@/lib/eda/common";
 
 function buildMatchTypeFilter(matchType: string): Prisma.HistoricalMatchWhereInput {
   const normalized = warehouseMatchType(matchType);
@@ -37,9 +46,14 @@ function unavailableTeamForm(team: string, reason: string): HistoricalTeamFormSn
     team,
     available: false,
     sampleSize: 0,
+    confidence: "low",
+    warning: reason,
     wins: 0,
     losses: 0,
     noResult: 0,
+    resolvedMatches: 0,
+    winPct: null,
+    winPctInterval: null,
     avgRuns: null,
     recentRecord: [],
     summary: reason,
@@ -78,6 +92,7 @@ export async function getTeamFormSnapshot(team: string, matchType: string): Prom
   const wins = matches.filter((match) => match.winnerKey === teamKey).length;
   const losses = matches.filter((match) => match.winnerKey && match.winnerKey !== teamKey).length;
   const noResult = matches.filter((match) => !match.winnerKey).length;
+  const resolvedMatches = wins + losses;
   const recentRecord = matches.map((match) => {
     if (!match.winnerKey) return "NR";
     return match.winnerKey === teamKey ? "W" : "L";
@@ -100,20 +115,29 @@ export async function getTeamFormSnapshot(team: string, matchType: string): Prom
   }
 
   const avgRuns = totalsByMatch.size > 0 ? round(average([...totalsByMatch.values()]), 1) : null;
+  const sampleSize = matches.length;
+  const warning = lowSampleWarning(sampleSize, { medium: 3, high: 5 });
+  const confidence = confidenceTierFromSample(sampleSize, { medium: 3, high: 5 });
+  const winPct = resolvedMatches > 0 ? pct(wins, resolvedMatches) : null;
 
   return {
     team,
     available: true,
-    sampleSize: matches.length,
+    sampleSize,
+    confidence,
+    warning,
     wins,
     losses,
     noResult,
+    resolvedMatches,
+    winPct,
+    winPctInterval: resolvedMatches > 0 ? wilsonInterval(wins, resolvedMatches) : null,
     avgRuns,
     recentRecord,
     summary:
       avgRuns !== null
-        ? `${team} are ${wins}-${losses}-${noResult} in their last ${matches.length} warehouse matches, averaging ${avgRuns} runs.`
-        : `${team} are ${wins}-${losses}-${noResult} in their last ${matches.length} warehouse matches.`,
+        ? `${team} are ${wins}-${losses}-${noResult} in their last ${sampleSize} warehouse matches, averaging ${avgRuns} runs.${warning ? ` ${warning}` : ""}`
+        : `${team} are ${wins}-${losses}-${noResult} in their last ${sampleSize} warehouse matches.${warning ? ` ${warning}` : ""}`,
   };
 }
 
@@ -123,9 +147,13 @@ function unavailableHeadToHead(teamA: string, teamB: string, reason: string): Hi
     teamA,
     teamB,
     sampleSize: 0,
+    confidence: "low",
+    warning: reason,
     teamAWins: 0,
     teamBWins: 0,
     noResult: 0,
+    rawTeamAWinPct: null,
+    rawWinInterval: null,
     recentEdge: "Unavailable",
     summary: reason,
   };
@@ -159,6 +187,7 @@ export async function getHeadToHeadSnapshot(
     take: 12,
     select: {
       winnerKey: true,
+      startedAt: true,
     },
   });
 
@@ -169,6 +198,10 @@ export async function getHeadToHeadSnapshot(
   const teamAWins = matches.filter((match) => match.winnerKey === teamAKey).length;
   const teamBWins = matches.filter((match) => match.winnerKey === teamBKey).length;
   const noResult = matches.length - teamAWins - teamBWins;
+  const resolvedMatches = teamAWins + teamBWins;
+  const sampleSize = matches.length;
+  const confidence = confidenceTierFromSample(sampleSize, { medium: 5, high: 10 });
+  const warning = lowSampleWarning(sampleSize, { medium: 5, high: 10 });
   const recentEdge =
     teamAWins === teamBWins
       ? "Even"
@@ -180,12 +213,18 @@ export async function getHeadToHeadSnapshot(
     available: true,
     teamA,
     teamB,
-    sampleSize: matches.length,
+    sampleSize,
+    confidence,
+    warning,
     teamAWins,
     teamBWins,
     noResult,
+    rawTeamAWinPct: resolvedMatches > 0 ? pct(teamAWins, resolvedMatches) : null,
+    rawWinInterval: resolvedMatches > 0 ? wilsonInterval(teamAWins, resolvedMatches) : null,
     recentEdge,
-    summary: `${teamA} lead ${teamAWins}-${teamBWins}${noResult > 0 ? ` with ${noResult} no-result matches` : ""} in ${matches.length} warehouse meetings.`,
+    summary:
+      `${teamA} lead ${teamAWins}-${teamBWins}${noResult > 0 ? ` with ${noResult} no-result matches` : ""} in ${sampleSize} warehouse meetings.` +
+      (warning ? ` ${warning}` : ""),
   };
 }
 
@@ -194,8 +233,13 @@ function unavailableVenue(venue: string, reason: string): HistoricalVenueSnapsho
     venue,
     available: false,
     sampleSize: 0,
+    chaseSampleSize: 0,
+    confidence: "low",
+    warning: reason,
     avgFirstInningsScore: null,
+    avgFirstInningsInterval: null,
     chaseWinPct: null,
+    chaseWinInterval: null,
     summary: reason,
   };
 }
@@ -211,11 +255,12 @@ export async function getVenueSnapshot(venue: string, matchType: string): Promis
     return unavailableVenue(venue, "Venue could not be normalized for the historical warehouse.");
   }
 
-  const matches = await prisma.historicalMatch.findMany({
+  const baseWhere = buildMatchTypeFilter(matchType);
+  let matches = await prisma.historicalMatch.findMany({
     where: {
-      ...buildMatchTypeFilter(matchType),
+      ...baseWhere,
       venueKey: {
-        contains: venueKey,
+        startsWith: venueKey,
       },
     },
     orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
@@ -225,6 +270,23 @@ export async function getVenueSnapshot(venue: string, matchType: string): Promis
       winnerKey: true,
     },
   });
+
+  if (matches.length === 0) {
+    matches = await prisma.historicalMatch.findMany({
+      where: {
+        ...baseWhere,
+        venueKey: {
+          contains: venueKey,
+        },
+      },
+      orderBy: [{ startedAt: "desc" }, { createdAt: "desc" }],
+      take: 80,
+      select: {
+        id: true,
+        winnerKey: true,
+      },
+    });
+  }
 
   if (matches.length === 0) {
     return unavailableVenue(venue, `No ${matchType} venue history was found for ${venue}.`);
@@ -268,18 +330,32 @@ export async function getVenueSnapshot(venue: string, matchType: string): Promis
     const chasingTeamKey = chasingTeamByMatch.get(match.id);
     return chasingTeamKey && match.winnerKey === chasingTeamKey;
   }).length;
+  const comparableChases = matches.filter((match) => {
+    const chasingTeamKey = chasingTeamByMatch.get(match.id);
+    return Boolean(chasingTeamKey && match.winnerKey);
+  }).length;
+  const firstInningsValues = [...firstInningsTotals.values()];
+  const sampleSize = matches.length;
+  const warning = lowSampleWarning(sampleSize, { medium: 5, high: 12 });
+  const confidence = confidenceTierFromSample(sampleSize, { medium: 5, high: 12 });
+  const avgFirstInningsScore =
+    firstInningsValues.length > 0 ? round(average(firstInningsValues), 1) : null;
 
   return {
     venue,
     available: true,
-    sampleSize: matches.length,
-    avgFirstInningsScore:
-      firstInningsTotals.size > 0 ? round(average([...firstInningsTotals.values()]), 1) : null,
-    chaseWinPct: matches.length > 0 ? pct(chaseWins, matches.length) : null,
+    sampleSize,
+    chaseSampleSize: comparableChases,
+    confidence,
+    warning,
+    avgFirstInningsScore,
+    avgFirstInningsInterval: meanInterval(firstInningsValues),
+    chaseWinPct: comparableChases > 0 ? pct(chaseWins, comparableChases) : null,
+    chaseWinInterval: comparableChases > 0 ? wilsonInterval(chaseWins, comparableChases) : null,
     summary:
-      firstInningsTotals.size > 0
-        ? `${venue} has ${matches.length} comparable warehouse matches with an average first-innings score of ${round(average([...firstInningsTotals.values()]), 1)}.`
-        : `${venue} has ${matches.length} comparable warehouse matches in the local history.`,
+      avgFirstInningsScore !== null
+        ? `${venue} has ${sampleSize} comparable warehouse matches with an average first-innings score of ${avgFirstInningsScore}.${warning ? ` ${warning}` : ""}`
+        : `${venue} has ${sampleSize} comparable warehouse matches in the local history.${warning ? ` ${warning}` : ""}`,
   };
 }
 

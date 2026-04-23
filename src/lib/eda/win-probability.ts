@@ -438,6 +438,6 @@ export function globalT20Prior(chaseWinPct: number | null): WinProbabilityPrior 
     priorWinPct: GLOBAL_T20_BATTING_FIRST_WIN_PCT,
     avgTarget: T20_RESOURCE_ANCHOR,
     chaseWinPct: chaseWinPct ?? 48, // global T20 chase win rate ≈ 48%
-    sampleSize: 50, // virtual sample for a reasonable CI
+    sampleSize: 12, // conservative fallback so global priors keep wide uncertainty bands
   };
 }

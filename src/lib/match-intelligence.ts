@@ -11,6 +11,7 @@ import type {
   Squad,
 } from "@/types/cricket";
 import { getOllamaHeaders, getOllamaUrl, OLLAMA_REQUEST_TIMEOUT_MS } from "@/lib/ollama";
+import { buildMetricQuality } from "@/lib/eda/common";
 
 const OLLAMA_URL = getOllamaUrl();
 const OLLAMA_MATCH_MODEL =
@@ -24,11 +25,6 @@ function average(values: number[]) {
 
 function roundStat(value: number, digits = 1) {
   return Number(value.toFixed(digits));
-}
-
-function formatRunRate(runs: number, overs: number) {
-  if (!overs) return "0.00";
-  return (runs / overs).toFixed(2);
 }
 
 function oversToBalls(overs: number) {
@@ -171,10 +167,11 @@ Players to consider: ${watchPlayers.join(", ") || "Not supplied"}`
 
 function buildInningsSummaries(scorecards: Scorecard[]): PostMatchInningsSummary[] {
   return scorecards.map((card) => {
-    const extras = parseExtras(card.extras);
+    const battingRuns = card.batting.reduce((sum, entry) => sum + entry.r, 0);
+    const parsedExtras = parseExtras(card.extras);
+    const extras = parsedExtras > 0 ? parsedExtras : Math.max(0, card.totalRuns - battingRuns);
     const boundaryRuns = card.batting.reduce((sum, entry) => sum + entry["4s"] * 4 + entry["6s"] * 6, 0);
     const topScorer = [...card.batting].sort((left, right) => right.r - left.r)[0];
-    const battingRuns = card.batting.reduce((sum, entry) => sum + entry.r, 0);
     const supportRuns = Math.max(0, battingRuns - (topScorer?.r ?? 0));
     const lowerOrderRuns = card.batting.slice(5).reduce((sum, entry) => sum + entry.r, 0);
 
@@ -187,15 +184,15 @@ function buildInningsSummaries(scorecards: Scorecard[]): PostMatchInningsSummary
       extras,
       extrasPct: percentage(extras, card.totalRuns),
       boundaryRuns,
-      boundaryPct: percentage(boundaryRuns, card.totalRuns),
+      boundaryPct: percentage(boundaryRuns, battingRuns),
       topScorerName: topScorer?.batsman.name || "N/A",
       topScorerRuns: topScorer?.r || 0,
       topScorerStrikeRate: roundStat(Number(topScorer?.sr || 0), 2),
-      topScorerPct: percentage(topScorer?.r || 0, card.totalRuns),
+      topScorerPct: percentage(topScorer?.r || 0, battingRuns),
       supportRuns,
-      supportPct: percentage(supportRuns, card.totalRuns),
+      supportPct: percentage(supportRuns, battingRuns),
       lowerOrderRuns,
-      lowerOrderPct: percentage(lowerOrderRuns, card.totalRuns),
+      lowerOrderPct: percentage(lowerOrderRuns, battingRuns),
     };
   });
 }
@@ -205,6 +202,7 @@ function buildBattingLeaders(scorecards: Scorecard[]): PostMatchBattingLeader[] 
     .flatMap((card) =>
       card.batting.map((entry) => {
         const boundaryRuns = entry["4s"] * 4 + entry["6s"] * 6;
+        const battingRuns = card.batting.reduce((sum, batter) => sum + batter.r, 0);
         return {
           name: entry.batsman.name,
           inning: card.inning,
@@ -214,7 +212,7 @@ function buildBattingLeaders(scorecards: Scorecard[]): PostMatchBattingLeader[] 
           fours: entry["4s"],
           sixes: entry["6s"],
           boundaryPct: percentage(boundaryRuns, Math.max(entry.r, 1)),
-          sharePct: percentage(entry.r, card.totalRuns),
+          sharePct: percentage(entry.r, battingRuns),
         };
       })
     )
@@ -255,10 +253,20 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
         value: "Pending",
         insight: "Once scorecards land, this section surfaces how the match tilted beyond the raw result.",
         tone: "warning",
+        quality: buildMetricQuality({
+          sampleSize: 0,
+          provenance: "observed",
+          confidence: "low",
+          warning: "Live scorecards are still unavailable.",
+        }),
       },
     ];
   }
 
+  const comparisonWarning =
+    summaries.length <= 1
+      ? "Only one innings is available, so comparative signals are provisional."
+      : null;
   const fastestInnings = [...summaries].sort((left, right) => right.runRate - left.runRate)[0];
   const boundaryHeavyInnings = [...summaries].sort((left, right) => right.boundaryPct - left.boundaryPct)[0];
   const balancedInnings = [...summaries].sort((left, right) => right.supportPct - left.supportPct)[0];
@@ -273,6 +281,11 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
       value: `${fastestInnings.inning} · ${fastestInnings.runRate}`,
       insight: "Fastest scoring innings by run rate, which often maps to scoreboard pressure control.",
       tone: fastestInnings.runRate >= 8 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: comparisonWarning,
+      }),
     },
     {
       id: "signal-balance",
@@ -280,6 +293,11 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
       value: `${balancedInnings.inning} · ${formatPercentage(balancedInnings.supportPct)}`,
       insight: "Higher support share means the innings was not carried by one batter alone.",
       tone: balancedInnings.supportPct >= 55 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: comparisonWarning,
+      }),
     },
     {
       id: "signal-boundaries",
@@ -287,6 +305,11 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
       value: `${boundaryHeavyInnings.inning} · ${formatPercentage(boundaryHeavyInnings.boundaryPct)}`,
       insight: "Shows which innings leaned most on fours and sixes rather than strike rotation.",
       tone: boundaryHeavyInnings.boundaryPct >= 55 ? "warning" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: comparisonWarning,
+      }),
     },
     {
       id: "signal-lower-order",
@@ -294,6 +317,11 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
       value: `${lowerOrderLift.inning} · ${formatPercentage(lowerOrderLift.lowerOrderPct)}`,
       insight: "Useful read on whether the finishers or tail extended the total meaningfully.",
       tone: lowerOrderLift.lowerOrderPct >= 18 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: comparisonWarning,
+      }),
     },
     {
       id: "signal-extras",
@@ -301,6 +329,11 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
       value: `${extrasLeak.inning} · ${formatPercentage(extrasLeak.extrasPct)}`,
       insight: "Extras as a share of the innings total. Higher numbers usually reflect pressure release.",
       tone: extrasLeak.extrasPct >= 8 ? "warning" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: comparisonWarning,
+      }),
     },
     {
       id: "signal-bowling",
@@ -312,13 +345,18 @@ function buildMatchSignals(summaries: PostMatchInningsSummary[], bowlingLeaders:
         ? "Top wicket-taking spell, with economy used as the tiebreaker."
         : "Bowling control becomes available once spell data is present.",
       tone: bestBowling ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: bestBowling ? oversToBalls(bestBowling.overs) : 0,
+        provenance: "observed",
+        warning: bestBowling ? comparisonWarning : "Bowling spell data is still unavailable.",
+      }),
     },
   ];
 }
 
 function buildReportNotes(match: Match, summaries: PostMatchInningsSummary[]) {
   const notes = [
-    "This report is derived from innings totals, batting scorecards, bowling spells, and extras recorded by the match data provider.",
+    "This report is derived from innings totals, batting scorecards, bowling spells, and extras from the provider feed or inferred from total runs minus batting runs when the extras breakout is omitted.",
     "We intentionally avoid fake phase claims when ball-by-ball tempo splits are not available from the scorecard feed.",
   ];
 
@@ -373,25 +411,6 @@ function buildFallbackTakeaways(summaries: PostMatchInningsSummary[], bowlingLea
       ? `${bestBowling.name}'s ${bestBowling.wickets}/${bestBowling.runsConceded} in ${bestBowling.inning} was the cleanest spell of control in the data.`
       : "Bowling control will read more clearly once wicket-taking spells are fully available.",
   ];
-}
-
-function buildFallbackStandouts(
-  battingLeaders: PostMatchBattingLeader[],
-  bowlingLeaders: PostMatchBowlingLeader[],
-  summaries: PostMatchInningsSummary[]
-) {
-  const standoutBatters = battingLeaders
-    .slice(0, 3)
-    .map((entry) => `${entry.name}: ${entry.runs} off ${entry.balls} in ${entry.inning}`);
-  const standoutBowlers = bowlingLeaders
-    .slice(0, 2)
-    .map((entry) => `${entry.name}: ${entry.wickets}/${entry.runsConceded} ${entry.inning}`);
-
-  if (standoutBatters.length + standoutBowlers.length > 0) {
-    return [...standoutBatters, ...standoutBowlers].slice(0, 5);
-  }
-
-  return summaries.slice(0, 2).map((summary) => `${summary.inning}: ${summary.totalRuns}/${summary.totalWickets} at ${summary.runRate} rpo`);
 }
 
 export async function buildPostMatchIntel(match: Match, scorecards: Scorecard[] | null): Promise<PostMatchIntel> {
@@ -465,6 +484,12 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
         value: "Waiting",
         insight: "Live scorecard data is required before post-match analytics can be generated.",
         tone: "warning",
+        quality: buildMetricQuality({
+          sampleSize: 0,
+          provenance: "observed",
+          confidence: "low",
+          warning: "Provider scorecards have not arrived yet.",
+        }),
       },
     ];
   }
@@ -482,6 +507,10 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
   const extrasLeak = [...summaries].sort((left, right) => right.extrasPct - left.extrasPct)[0];
   const topBatter = battingLeaders[0];
   const bestBowler = bowlingLeaders[0];
+  const inningsWarning =
+    summaries.length <= 1
+      ? "Only one innings is available, so full-match comparisons are provisional."
+      : null;
 
   return [
     {
@@ -490,6 +519,10 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: `${Math.max(...totals)}`,
       insight: `${highestTotal.inning} posted the highest raw score in the match.`,
       tone: "good",
+      quality: buildMetricQuality({
+        sampleSize: 1,
+        provenance: "observed",
+      }),
     },
     {
       id: "avg-run-rate",
@@ -497,6 +530,11 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: average(runRates).toFixed(2),
       insight: "Mean scoring speed across all available innings.",
       tone: average(runRates) >= 8 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: inningsWarning,
+      }),
     },
     {
       id: "fastest-innings",
@@ -504,6 +542,11 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: `${fastestInnings.runRate} rpo`,
       insight: `${fastestInnings.inning} had the highest scoring tempo.`,
       tone: fastestInnings.runRate >= 8 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: inningsWarning,
+      }),
     },
     {
       id: "boundary-reliance",
@@ -511,6 +554,11 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: formatPercentage(boundaryHeavyInnings.boundaryPct),
       insight: `${boundaryHeavyInnings.inning} depended most on fours and sixes for scoring.`,
       tone: boundaryHeavyInnings.boundaryPct >= 55 ? "warning" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: inningsWarning,
+      }),
     },
     {
       id: "support-share",
@@ -518,6 +566,11 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: formatPercentage(balancedInnings.supportPct),
       insight: `${balancedInnings.inning} spread its runs best beyond the top scorer.`,
       tone: balancedInnings.supportPct >= 55 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: inningsWarning,
+      }),
     },
     {
       id: "lower-order-lift",
@@ -525,6 +578,11 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: formatPercentage(lowerOrderLift.lowerOrderPct),
       insight: `${lowerOrderLift.inning} got the biggest contribution from No. 6 and below.`,
       tone: lowerOrderLift.lowerOrderPct >= 18 ? "good" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: inningsWarning,
+      }),
     },
     {
       id: "extras-tax",
@@ -532,15 +590,25 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
       value: formatPercentage(extrasLeak.extrasPct),
       insight: `${extrasLeak.inning} benefited most from opposition indiscipline.`,
       tone: extrasLeak.extrasPct >= 8 ? "warning" : "neutral",
+      quality: buildMetricQuality({
+        sampleSize: summaries.length,
+        provenance: "observed",
+        warning: inningsWarning,
+      }),
     },
     {
       id: "top-batter",
       label: "Top batter",
       value: topBatter ? `${topBatter.name} (${topBatter.runs})` : "N/A",
       insight: topBatter
-        ? `${topBatter.inning} with ${formatPercentage(topBatter.sharePct)} of the innings total.`
+        ? `${topBatter.inning} with ${formatPercentage(topBatter.sharePct)} of the batting runs.`
         : "No batting data available.",
       tone: "good",
+      quality: buildMetricQuality({
+        sampleSize: topBatter?.balls ?? 0,
+        provenance: "observed",
+        warning: topBatter ? null : "Batting card data was unavailable.",
+      }),
     },
     {
       id: "top-bowler",
@@ -550,6 +618,11 @@ export function buildPostMatchEdaCards(scorecards: Scorecard[]): PostMatchEdaCar
         ? `${bestBowler.inning}${bestBowler.ballsPerWicket ? `, ${ballsToOvers(Math.round(bestBowler.ballsPerWicket))} balls per wicket.` : "."}`
         : "No bowling data available.",
       tone: "good",
+      quality: buildMetricQuality({
+        sampleSize: bestBowler ? oversToBalls(bestBowler.overs) : 0,
+        provenance: "observed",
+        warning: bestBowler ? null : "Bowling card data was unavailable.",
+      }),
     },
   ];
 }

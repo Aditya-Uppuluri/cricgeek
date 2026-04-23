@@ -1,3 +1,5 @@
+import type { MetricQuality } from "@/types/metrics";
+
 export interface Match {
   id: string;
   name: string;
@@ -157,7 +159,9 @@ export interface PostMatchEdaCard {
   label: string;
   value: string;
   insight: string;
+  subValue?: string;
   tone?: "neutral" | "good" | "warning";
+  quality?: MetricQuality;
 }
 
 export interface PostMatchSignal {
@@ -166,6 +170,7 @@ export interface PostMatchSignal {
   value: string;
   insight: string;
   tone?: "neutral" | "good" | "warning";
+  quality?: MetricQuality;
 }
 
 export interface PostMatchInningsSummary {

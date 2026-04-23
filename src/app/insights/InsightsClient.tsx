@@ -17,6 +17,7 @@ import type {
   InsightsEvaluationResponse,
   InsightsMetadata,
   LiveAdvisorResponse,
+  MetricSupport,
   PlayerExplorerResponse,
 } from "@/types/insights";
 import {
@@ -107,6 +108,13 @@ function formatNumber(value: number | null | undefined, digits = 1) {
   return value.toFixed(digits);
 }
 
+function formatInterval(interval?: MetricSupport["uncertainty"] | null) {
+  if (!interval) return undefined;
+  const decimals = interval.decimals ?? 1;
+  const unit = interval.unit ?? "";
+  return `${interval.label} ${interval.lower.toFixed(decimals)}–${interval.upper.toFixed(decimals)}${unit}`;
+}
+
 function normalizePlayerText(value: string) {
   return value
     .toLowerCase()
@@ -161,6 +169,12 @@ function scoreTone(value: number) {
   return "text-red-300";
 }
 
+function supportTone(tier?: MetricSupport["confidenceTier"]) {
+  if (tier === "high") return "border-cg-green/30 bg-cg-green/10 text-cg-green";
+  if (tier === "medium") return "border-amber-300/30 bg-amber-300/10 text-amber-200";
+  return "border-red-400/30 bg-red-400/10 text-red-200";
+}
+
 function StatCard({
   label,
   value,
@@ -177,6 +191,31 @@ function StatCard({
       </p>
       <p className="mt-3 text-2xl font-black text-white">{value}</p>
       {detail ? <p className="mt-2 text-xs text-gray-400">{detail}</p> : null}
+    </div>
+  );
+}
+
+function SupportPanel({ support }: { support?: MetricSupport | null }) {
+  if (!support) return null;
+
+  return (
+    <div className="mt-4 space-y-2">
+      <div className="flex flex-wrap items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.18em]">
+        <span className="rounded-full border border-gray-700 bg-black/20 px-3 py-1 text-gray-300">
+          n={support.sampleSize}
+        </span>
+        <span className={`rounded-full border px-3 py-1 ${supportTone(support.confidenceTier)}`}>
+          {support.confidenceTier} confidence
+        </span>
+      </div>
+      {formatInterval(support.uncertainty) ? (
+        <p className="text-xs text-gray-400">{formatInterval(support.uncertainty)}</p>
+      ) : null}
+      {support.warning ? (
+        <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+          {support.warning}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -214,7 +253,11 @@ function RecommendationCard({
         <StatCard label="xRuns" value={formatNumber(recommendation.expRuns)} />
         <StatCard label="Dismissal" value={formatPct(recommendation.dismissalProbability)} />
         <StatCard label="Sit. SR" value={formatNumber(recommendation.situationStrikeRate, 0)} />
-        <StatCard label="Entries" value={String(recommendation.entryCount)} />
+        <StatCard
+          label="Entries"
+          value={String(recommendation.entryCount)}
+          detail={recommendation.support ? `${recommendation.support.confidenceTier} confidence` : undefined}
+        />
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -242,6 +285,7 @@ function RecommendationCard({
           </div>
         ))}
       </div>
+      <SupportPanel support={recommendation.support} />
     </article>
   );
 }
@@ -276,7 +320,11 @@ function BowlingCard({
       <div className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
         <StatCard label="xWickets/Ov" value={formatNumber(recommendation.expectedWickets, 2)} />
         <StatCard label="xRuns/Ov" value={formatNumber(recommendation.expectedRunsConceded)} />
-        <StatCard label="Overs Sample" value={String(recommendation.oversSample)} />
+        <StatCard
+          label="Overs Sample"
+          value={String(recommendation.oversSample)}
+          detail={recommendation.support ? `${recommendation.support.confidenceTier} confidence` : undefined}
+        />
       </div>
 
       <div className="mt-5 space-y-2">
@@ -289,6 +337,7 @@ function BowlingCard({
           </div>
         ))}
       </div>
+      <SupportPanel support={recommendation.support} />
     </article>
   );
 }
@@ -1087,7 +1136,7 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
                   </p>
                   <h2 className="mt-3 text-3xl font-black text-white">Model evaluation and calibration</h2>
                   <p className="mt-3 max-w-3xl text-sm leading-7 text-gray-300">
-                    These metrics compare recommendation quality, coverage, and baseline lift across sampled historical T20 situations from the integrated capstone artifacts.
+                    These metrics compare recommendation quality, coverage, calibration, and held-out lift versus the career-average baseline across sampled historical T20 situations from the integrated capstone artifacts.
                   </p>
                 </div>
                 <button
@@ -1108,11 +1157,32 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
 
             {evaluation ? (
               <>
+                {evaluation.summary.warning ? (
+                  <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 px-4 py-3 text-sm text-amber-100">
+                    {evaluation.summary.warning}
+                  </div>
+                ) : null}
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                  <StatCard label="Top-1 Accuracy" value={`${evaluation.summary.top1Accuracy.toFixed(1)}%`} />
-                  <StatCard label="Top-3 Accuracy" value={`${evaluation.summary.top3Accuracy.toFixed(1)}%`} />
-                  <StatCard label="Coverage" value={`${evaluation.summary.coverage.toFixed(1)}%`} />
-                  <StatCard label="Baseline Lift" value={`${evaluation.summary.improvementPct.toFixed(2)}%`} />
+                  <StatCard
+                    label="Top-1 Accuracy"
+                    value={`${evaluation.summary.top1Accuracy.toFixed(1)}%`}
+                    detail={formatInterval(evaluation.summary.top1Interval)}
+                  />
+                  <StatCard
+                    label="Top-3 Accuracy"
+                    value={`${evaluation.summary.top3Accuracy.toFixed(1)}%`}
+                    detail={formatInterval(evaluation.summary.top3Interval)}
+                  />
+                  <StatCard
+                    label="Coverage"
+                    value={`${evaluation.summary.coverage.toFixed(1)}%`}
+                    detail={formatInterval(evaluation.summary.coverageInterval)}
+                  />
+                  <StatCard
+                    label="Held-out Lift"
+                    value={`${evaluation.summary.improvementPct.toFixed(2)}%`}
+                    detail={`${evaluation.summary.confidenceTier || "low"} confidence · ${evaluation.summary.sampleSituations} sampled situations`}
+                  />
                 </div>
 
                 <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
@@ -1269,12 +1339,27 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
                         <p className="mt-2 text-2xl font-black text-white">
                           {formatPct(playerExplorer.summary.dismissalRate)}
                         </p>
+                        {playerExplorer.summary.dismissalSupport?.warning ? (
+                          <p className="mt-2 max-w-xs text-xs text-amber-200">
+                            {playerExplorer.summary.dismissalSupport.warning}
+                          </p>
+                        ) : null}
                       </div>
                     </div>
 
+                    <SupportPanel support={playerExplorer.summary.support} />
+
                     <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-                      <StatCard label="Situations" value={String(playerExplorer.summary.situations)} />
-                      <StatCard label="Avg xRuns" value={formatNumber(playerExplorer.summary.avgExpectedRuns)} />
+                      <StatCard
+                        label="Situations"
+                        value={String(playerExplorer.summary.situations)}
+                        detail={playerExplorer.summary.support ? `${playerExplorer.summary.support.confidenceTier} confidence` : undefined}
+                      />
+                      <StatCard
+                        label="Avg xRuns"
+                        value={formatNumber(playerExplorer.summary.avgExpectedRuns)}
+                        detail={formatInterval(playerExplorer.summary.support?.uncertainty)}
+                      />
                       <StatCard label="Entries" value={String(playerExplorer.summary.totalEntries)} />
                       <StatCard
                         label="Avg Sit. SR"
@@ -1294,6 +1379,11 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
                           <p className="mt-3 text-2xl font-black text-white">
                             {formatNumber(playerExplorer.summary.pdiByPhase[phase], 2)}
                           </p>
+                          {playerExplorer.summary.phaseSupport?.[phase] ? (
+                            <p className="mt-2 text-xs text-gray-400">
+                              n={playerExplorer.summary.phaseSupport[phase]?.sampleSize} · {playerExplorer.summary.phaseSupport[phase]?.confidenceTier} confidence
+                            </p>
+                          ) : null}
                         </div>
                       ))}
                     </div>
@@ -1313,7 +1403,8 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
                             <th className="pb-3 pr-4">Entries</th>
                             <th className="pb-3 pr-4">Avg Runs</th>
                             <th className="pb-3 pr-4">SR</th>
-                            <th className="pb-3">Dismissal</th>
+                            <th className="pb-3 pr-4">Dismissal</th>
+                            <th className="pb-3">Confidence</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-800">
@@ -1330,6 +1421,9 @@ export default function InsightsClient({ initialMatches }: { initialMatches: Mat
                               </td>
                               <td className="py-3 text-gray-300">
                                 {formatPct(profile.dismissal_probability)}
+                              </td>
+                              <td className="py-3 text-gray-300">
+                                {profile.support ? `${profile.support.confidenceTier} · n=${profile.support.sampleSize}` : "NA"}
                               </td>
                             </tr>
                           ))}

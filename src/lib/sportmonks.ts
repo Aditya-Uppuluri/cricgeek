@@ -642,13 +642,16 @@ function parseSportMonksScorecards(fixture: SMFixture): Scorecard[] | null {
           : resolvedBattingTeamId === fixture.visitorteam?.id
             ? fixture.visitorteam.name
             : `Team ${resolvedBattingTeamId}`;
+      const totalRuns = Number(runRow?.score ?? 0);
+      const battingRuns = battingForInning.reduce((sum, entry) => sum + entry.r, 0);
+      const inferredExtras = Math.max(0, totalRuns - battingRuns);
 
       return {
         inning: `${battingTeamName} Innings ${index + 1}`,
-        totalRuns: Number(runRow?.score ?? 0),
+        totalRuns,
         totalWickets: Number(runRow?.wickets ?? 0),
         totalOvers: Number(runRow?.overs ?? 0),
-        extras: "",
+        extras: String(inferredExtras),
         batting: battingForInning,
         bowling: bowlingForInning,
       };

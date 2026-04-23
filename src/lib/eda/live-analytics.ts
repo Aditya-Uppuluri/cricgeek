@@ -241,12 +241,13 @@ function buildBallStates(
 ) {
   const scheduledOvers = getScheduledOvers(match.matchType);
   const totalBalls = scheduledOvers !== null ? scheduledOvers * 6 : null;
+  const orderedBalls = sortBallsAscending(balls);
   let cumulativeRuns = 0;
   let cumulativeWickets = 0;
   let legalBalls = 0;
   let previousWinProbability = 50;
 
-  return sortBallsAscending(balls).map((ball) => {
+  return orderedBalls.map((ball, index) => {
     cumulativeRuns += ball.score;
     cumulativeWickets += ball.isWicket ? 1 : 0;
     legalBalls += ball.legalBall === false ? 0 : 1;
@@ -260,8 +261,8 @@ function buildBallStates(
     const phase = inferPhase(oversUsed, match.matchType);
     const expectedRuns = phaseBaseRunRate(match.matchType, phase) / 6;
 
-    // Compute recent run rate from last 12 balls for Bayesian engine
-    const recentBalls = sortBallsAscending(balls).slice(-12);
+    // Compute recent run rate from the trailing 12 balls up to this state.
+    const recentBalls = orderedBalls.slice(Math.max(0, index - 11), index + 1);
     const recentLegal = recentBalls.filter((b) => b.legalBall !== false);
     const recentRunRate = recentLegal.length >= 3
       ? (recentBalls.reduce((s, b) => s + b.score, 0) / Math.max(recentLegal.length / 6, 0.1))

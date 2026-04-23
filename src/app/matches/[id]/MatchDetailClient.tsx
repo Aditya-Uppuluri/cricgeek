@@ -753,21 +753,6 @@ export default function MatchDetailClient({
             </div>
           )}
 
-          {/* Live Tab — innings split view */}
-          {activeTab === "live" && hasScorecard && (
-            <InningsSplitView
-              scorecards={liveScorecard!}
-              selectedInning={selectedInning}
-              onSelectInning={setSelectedInning}
-            />
-          )}
-          {activeTab === "live" && !hasScorecard && (
-            <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-6 text-sm text-gray-400">
-              {isUpcoming
-                ? "The scorecard will appear here once the first innings begins."
-                : "Live scorecard data has not landed yet from the provider. This panel will update automatically."}
-            </div>
-          )}
           {activeTab === "live" && (
             <LiveEdaPanel
               matchId={liveMatch.id}
@@ -801,8 +786,8 @@ export default function MatchDetailClient({
           {activeTab === "live" && !hasCommentary && (
             <div className="mt-6 rounded-xl border border-gray-800 bg-cg-dark-2 p-6 text-sm text-gray-400">
               {isUpcoming
-                ? "Ball-by-ball commentary will appear below the scorecard once the match goes live."
-                : "Ball-by-ball commentary has not arrived yet. We’ll keep polling the API and place it below the scorecard here."}
+                ? "Ball-by-ball commentary will appear here once the match goes live."
+                : "Ball-by-ball commentary has not arrived yet. We’ll keep polling the API and place it here automatically."}
             </div>
           )}
 

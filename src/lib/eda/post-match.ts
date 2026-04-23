@@ -1,5 +1,5 @@
 import { buildPostMatchIntel } from "@/lib/match-intelligence";
-import { buildConfidence, buildFreshness, dedupeSources } from "@/lib/eda/common";
+import { buildConfidence, buildFreshness, buildMetricQuality, dedupeSources, round, shrinkRate } from "@/lib/eda/common";
 import {
   getHeadToHeadSnapshot,
   getTeamFormSnapshot,
@@ -7,6 +7,39 @@ import {
 } from "@/lib/eda/historical";
 import type { Match, Scorecard } from "@/types/cricket";
 import type { PostMatchEdaReport } from "@/types/eda";
+import type { MetricUncertainty } from "@/types/metrics";
+
+function formatMetricInterval(interval?: MetricUncertainty | null) {
+  if (!interval) return undefined;
+  const unit = interval.unit ?? "";
+  return `${interval.label} ${interval.lower}–${interval.upper}${unit}`;
+}
+
+function buildBlendedEdge(input: {
+  teamA: string;
+  teamB: string;
+  teamAFormWins: number;
+  teamAFormResolved: number;
+  teamBFormWins: number;
+  teamBFormResolved: number;
+  headToHeadWinsA: number;
+  headToHeadWinsB: number;
+}) {
+  const resolved = input.headToHeadWinsA + input.headToHeadWinsB;
+  const teamAFormRate = input.teamAFormResolved > 0 ? input.teamAFormWins / input.teamAFormResolved : 0.5;
+  const teamBFormRate = input.teamBFormResolved > 0 ? input.teamBFormWins / input.teamBFormResolved : 0.5;
+  const priorRateA = (teamAFormRate + (1 - teamBFormRate)) / 2;
+  const blendedRateA = shrinkRate(input.headToHeadWinsA, resolved, priorRateA, 6);
+  const blendedPct = round(blendedRateA * 100, 1);
+
+  return {
+    resolved,
+    priorPctA: round(priorRateA * 100, 1),
+    blendedPct,
+    leader:
+      blendedPct >= 52.5 ? input.teamA : blendedPct <= 47.5 ? input.teamB : "Even",
+  };
+}
 
 function inferWinner(match: Match) {
   const normalizedStatus = match.status.toLowerCase();
@@ -45,6 +78,23 @@ export async function buildPostMatchEdaReport(
     winner ? getTeamFormSnapshot(winner, match.matchType) : Promise.resolve(null),
     loser ? getTeamFormSnapshot(loser, match.matchType) : Promise.resolve(null),
   ]);
+  const blendedEdge =
+    winner && loser && winnerForm && loserForm
+      ? buildBlendedEdge({
+          teamA: teamA,
+          teamB: teamB,
+          teamAFormWins: winner === teamA ? winnerForm.wins : loserForm.wins,
+          teamAFormResolved: winner === teamA
+            ? (winnerForm.resolvedMatches ?? winnerForm.wins + winnerForm.losses)
+            : (loserForm.resolvedMatches ?? loserForm.wins + loserForm.losses),
+          teamBFormWins: winner === teamB ? winnerForm.wins : loserForm.wins,
+          teamBFormResolved: winner === teamB
+            ? (winnerForm.resolvedMatches ?? winnerForm.wins + winnerForm.losses)
+            : (loserForm.resolvedMatches ?? loserForm.wins + loserForm.losses),
+          headToHeadWinsA: headToHead.teamAWins,
+          headToHeadWinsB: headToHead.teamBWins,
+        })
+      : null;
 
   const primarySummary = intel.inningsSummaries[0];
   const benchmarkCards = [
@@ -59,10 +109,18 @@ export async function buildPostMatchEdaReport(
         primarySummary && venue.avgFirstInningsScore !== null
           ? `${primarySummary.inning} finished ${Math.round(primarySummary.totalRuns - venue.avgFirstInningsScore)} runs versus the warehouse venue average.`
           : venue.summary,
+      subValue: formatMetricInterval(venue.avgFirstInningsInterval),
       tone:
         primarySummary && venue.avgFirstInningsScore !== null && primarySummary.totalRuns >= venue.avgFirstInningsScore
           ? "good" as const
           : "neutral" as const,
+      quality: buildMetricQuality({
+        sampleSize: venue.sampleSize,
+        provenance: "historical",
+        confidence: venue.confidence,
+        warning: venue.warning,
+        uncertainty: venue.avgFirstInningsInterval ?? null,
+      }),
     },
     {
       id: "winner-form",
@@ -70,13 +128,40 @@ export async function buildPostMatchEdaReport(
       value: winnerForm?.available ? `${winnerForm.wins}-${winnerForm.losses}-${winnerForm.noResult}` : "Waiting",
       insight: winnerForm?.summary || "Winner form becomes available once the historical warehouse has comparable matches.",
       tone: winnerForm?.available ? "good" as const : "neutral" as const,
+      subValue: winnerForm?.avgRuns != null ? `Avg ${winnerForm.avgRuns} runs` : undefined,
+      quality: buildMetricQuality({
+        sampleSize: winnerForm?.sampleSize ?? 0,
+        provenance: "historical",
+        confidence: winnerForm?.confidence ?? "low",
+        warning: winnerForm?.warning ?? null,
+        uncertainty: winnerForm?.winPctInterval ?? null,
+      }),
     },
     {
       id: "head-to-head-context",
-      label: "Head-to-head context",
-      value: headToHead.available ? `${headToHead.teamAWins}-${headToHead.teamBWins}` : "Waiting",
-      insight: headToHead.summary,
+      label: "Blended matchup edge",
+      value:
+        blendedEdge
+          ? blendedEdge.leader === "Even"
+            ? "Near even"
+            : `${blendedEdge.blendedPct}% ${blendedEdge.leader}`
+          : "Waiting",
+      insight:
+        blendedEdge
+          ? `Raw meetings are ${headToHead.teamAWins}-${headToHead.teamBWins}. This card shrinks that direct history back toward recent team form so thin samples do not overstate the matchup edge.`
+          : headToHead.summary,
+      subValue:
+        blendedEdge
+          ? `Raw ${headToHead.teamAWins}-${headToHead.teamBWins} · form prior ${blendedEdge.priorPctA}% ${teamA}`
+          : undefined,
       tone: headToHead.available ? "neutral" as const : "warning" as const,
+      quality: buildMetricQuality({
+        sampleSize: headToHead.sampleSize,
+        provenance: "blended",
+        confidence: headToHead.confidence,
+        warning: headToHead.warning,
+        uncertainty: headToHead.rawWinInterval ?? null,
+      }),
     },
   ];
 

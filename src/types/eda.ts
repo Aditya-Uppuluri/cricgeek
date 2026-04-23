@@ -1,6 +1,7 @@
 import type { CricketNewsArticle } from "@/lib/news/types";
 import type { Match, PostMatchEdaCard, PostMatchIntel, Squad } from "@/types/cricket";
 import type { InsightsAdvisorResponse } from "@/types/insights";
+import type { MetricConfidenceTier, MetricUncertainty } from "@/types/metrics";
 
 export type EdaConfidenceLabel = "high" | "medium" | "low";
 export type EdaSourceType =
@@ -39,9 +40,14 @@ export interface HistoricalTeamFormSnapshot {
   team: string;
   available: boolean;
   sampleSize: number;
+  confidence: MetricConfidenceTier;
+  warning?: string | null;
   wins: number;
   losses: number;
   noResult: number;
+  resolvedMatches?: number;
+  winPct?: number | null;
+  winPctInterval?: MetricUncertainty | null;
   avgRuns: number | null;
   recentRecord: string[];
   summary: string;
@@ -52,9 +58,13 @@ export interface HistoricalHeadToHeadSnapshot {
   teamA: string;
   teamB: string;
   sampleSize: number;
+  confidence: MetricConfidenceTier;
+  warning?: string | null;
   teamAWins: number;
   teamBWins: number;
   noResult: number;
+  rawTeamAWinPct?: number | null;
+  rawWinInterval?: MetricUncertainty | null;
   recentEdge: string;
   summary: string;
 }
@@ -63,8 +73,13 @@ export interface HistoricalVenueSnapshot {
   venue: string;
   available: boolean;
   sampleSize: number;
+  chaseSampleSize?: number;
+  confidence: MetricConfidenceTier;
+  warning?: string | null;
   avgFirstInningsScore: number | null;
+  avgFirstInningsInterval?: MetricUncertainty | null;
   chaseWinPct: number | null;
+  chaseWinInterval?: MetricUncertainty | null;
   summary: string;
 }
 

@@ -1,3 +1,12 @@
+import type { MetricConfidenceTier, MetricUncertainty } from "@/types/metrics";
+
+export interface MetricSupport {
+  sampleSize: number;
+  confidenceTier: MetricConfidenceTier;
+  warning?: string | null;
+  uncertainty?: MetricUncertainty | null;
+}
+
 export interface InsightsMetadata {
   teams: string[];
   teamsByGender: {
@@ -55,6 +64,7 @@ export interface BattingRecommendation {
   modelScore?: number | null;
   phase: string;
   reasons: string[];
+  support?: MetricSupport;
 }
 
 export interface BowlingRecommendation {
@@ -67,6 +77,7 @@ export interface BowlingRecommendation {
   utilityScore: number;
   oversSample: number;
   reasons: string[];
+  support?: MetricSupport;
 }
 
 export interface InsightsAdvisorResponse {
@@ -86,6 +97,11 @@ export interface EvaluationSummary {
   baselineMeanRuns: number;
   sampleSituations: number;
   cached: boolean;
+  top1Interval?: MetricUncertainty | null;
+  top3Interval?: MetricUncertainty | null;
+  coverageInterval?: MetricUncertainty | null;
+  confidenceTier?: MetricConfidenceTier;
+  warning?: string | null;
 }
 
 export interface EvaluationCalibrationRow {
@@ -130,6 +146,9 @@ export interface PlayerExplorerSummary {
     Middle?: number | null;
     Death?: number | null;
   };
+  support?: MetricSupport;
+  dismissalSupport?: MetricSupport | null;
+  phaseSupport?: Partial<Record<"Powerplay" | "Middle" | "Death", MetricSupport>>;
 }
 
 export interface PlayerSituationProfile {
@@ -140,6 +159,7 @@ export interface PlayerSituationProfile {
   median_runs_after_entry?: number | null;
   avg_strike_rate_after_entry?: number | null;
   dismissal_probability?: number | null;
+  support?: MetricSupport;
 }
 
 export interface PlayerExplorerResponse {
