@@ -2,7 +2,7 @@ import {
   generateMatchAnalysisMetadata,
   MatchAnalysisPageContent,
   type MatchAnalysisPageProps,
-} from "./AnalysisPageContent";
+} from "@/components/matches/MatchAnalysisPageContent";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";

@@ -39,7 +39,7 @@ export async function MatchAnalysisPageContent({ params }: MatchAnalysisPageProp
 
   if (!match) {
     return (
-      <div className="max-w-5xl mx-auto px-4 py-20 text-center">
+      <div className="mx-auto max-w-5xl px-4 py-20 text-center">
         <h1 className="text-2xl font-black text-white">Analysis unavailable</h1>
         <p className="mt-2 text-sm text-gray-400">We could not load the analysis for this match.</p>
       </div>
@@ -53,7 +53,7 @@ export async function MatchAnalysisPageContent({ params }: MatchAnalysisPageProp
   const { commentarySession, blogs, coverageAvailable } = coverage;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 py-8 space-y-6">
+    <div className="mx-auto max-w-6xl space-y-6 px-4 py-8 sm:px-6">
       <Link href={`/matches/${match.id}`} className="inline-flex items-center gap-2 text-sm text-gray-400 hover:text-white">
         <ArrowLeft size={14} />
         Back to Match Centre
@@ -64,7 +64,11 @@ export async function MatchAnalysisPageContent({ params }: MatchAnalysisPageProp
         <h1 className="mt-3 text-3xl font-black text-white">{intel.headline}</h1>
         <p className="mt-3 max-w-3xl text-sm leading-7 text-gray-300">{intel.summary}</p>
         <div className="mt-5 flex flex-wrap gap-2">
-          <span className={`rounded-full px-3 py-1.5 text-xs font-semibold ${isReportReady ? "bg-cg-green/10 text-cg-green" : "bg-amber-500/10 text-amber-300"}`}>
+          <span
+            className={`rounded-full px-3 py-1.5 text-xs font-semibold ${
+              isReportReady ? "bg-cg-green/10 text-cg-green" : "bg-amber-500/10 text-amber-300"
+            }`}
+          >
             {isReportReady ? "Full scorecard EDA ready" : "Live / partial EDA"}
           </span>
           <span className="rounded-full bg-white/5 px-3 py-1.5 text-xs font-semibold text-white">
@@ -168,7 +172,7 @@ export async function MatchAnalysisPageContent({ params }: MatchAnalysisPageProp
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 space-y-6">
+        <div className="space-y-6 lg:col-span-2">
           <div className="rounded-xl border border-gray-800 bg-cg-dark-2 p-5">
             <h2 className="text-lg font-bold text-white">Turning Points</h2>
             <ul className="mt-4 space-y-3 text-sm text-gray-300">
@@ -300,15 +304,17 @@ export async function MatchAnalysisPageContent({ params }: MatchAnalysisPageProp
                 </p>
               )}
 
-              {!coverageAvailable ? null : blogs.length > 0 ? blogs.map((blog) => (
-                <Link
-                  key={blog.id}
-                  href={`/blog/${blog.slug}`}
-                  className="block rounded-lg border border-gray-800 bg-cg-dark px-4 py-3 text-blue-300 hover:bg-white/5"
-                >
-                  {blog.title}
-                </Link>
-              )) : (
+              {!coverageAvailable ? null : blogs.length > 0 ? (
+                blogs.map((blog) => (
+                  <Link
+                    key={blog.id}
+                    href={`/blog/${blog.slug}`}
+                    className="block rounded-lg border border-gray-800 bg-cg-dark px-4 py-3 text-blue-300 hover:bg-white/5"
+                  >
+                    {blog.title}
+                  </Link>
+                ))
+              ) : (
                 <Link
                   href={`/blog/write?matchId=${encodeURIComponent(match.id)}&matchName=${encodeURIComponent(match.name)}`}
                   className="inline-flex items-center gap-2 rounded-lg border border-blue-500/20 bg-blue-500/5 px-4 py-3 text-blue-300 hover:bg-blue-500/10"
