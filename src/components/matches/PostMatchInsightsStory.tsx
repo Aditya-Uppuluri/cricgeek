@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import EdaAskPanel from "@/components/matches/EdaAskPanel";
 import EdaCards from "@/components/matches/EdaCards";
-import LiveEdaCharts from "@/components/matches/LiveEdaCharts";
+import PostMatchSummaryCharts from "@/components/matches/PostMatchSummaryCharts";
 import PostMatchSignals from "@/components/matches/PostMatchSignals";
 import { cn, formatDate } from "@/lib/utils";
 import type { MatchCoverageSummary } from "@/lib/match-coverage";
@@ -449,7 +449,7 @@ function CoverageDock({
           </GlassPanel>
 
           <GlassPanel title="Freshness Notes" subtitle="Context users should know before sharing the takeaways.">
-            <InsightList items={report.freshness.notes.length > 0 ? report.freshness.notes : ["All insights are grounded in the latest fetched scorecard, historical warehouse, and commentary replay."]} />
+            <InsightList items={report.freshness.notes.length > 0 ? report.freshness.notes : ["All insights are grounded in the latest fetched scorecard, historical warehouse, and retrospective innings reconstruction."]} />
           </GlassPanel>
         </div>
       </div>
@@ -470,6 +470,9 @@ export default function PostMatchInsightsStory({
   const margin = extractMargin(match.status);
   const topBatter = report.intel.battingLeaders[0] ?? null;
   const topBowler = report.intel.bowlingLeaders[0] ?? null;
+  const summaryAnalytics = report.retrospective.summaryAnalytics;
+  const hiddenContributor = summaryAnalytics?.hiddenContributors[0] ?? null;
+  const predictionReview = summaryAnalytics?.predictionReview ?? null;
 
   const slides: StorySlide[] = [
     {
@@ -491,7 +494,7 @@ export default function PostMatchInsightsStory({
             note={report.intel.summary}
             className="border-emerald-400/15 bg-emerald-400/[0.06]"
           />
-          <GlassPanel title="Executive Summary Cards" subtitle="The highest-signal reads from the final scorecard and retrospective replay.">
+          <GlassPanel title="Executive Summary Cards" subtitle="The highest-signal reads from the final scorecard and the retrospective innings report.">
             <EdaCards cards={report.retrospective.matchSummaryCards} />
           </GlassPanel>
         </div>
@@ -647,8 +650,8 @@ export default function PostMatchInsightsStory({
         <div className="space-y-5">
           <SpotlightMetric
             label="Sharpest swing"
-            value={truncateText(report.retrospective.biggestSwings[0] ?? report.intel.turningPoints[0] ?? "Replay still building", 110)}
-            note="This is the single clearest momentum swing highlighted by the retrospective replay and scorecard read."
+            value={truncateText(report.retrospective.biggestSwings[0] ?? report.intel.turningPoints[0] ?? "Retrospective model still building", 110)}
+            note="This is the clearest turning passage highlighted by the retrospective innings model and the scorecard read."
             className="border-fuchsia-400/15 bg-fuchsia-400/[0.06]"
           />
           <GlassPanel title="Turning Points" subtitle="Chronological swing moments called out by the post-match engine.">
@@ -658,7 +661,7 @@ export default function PostMatchInsightsStory({
       ),
       aside: (
         <div className="space-y-4">
-          <GlassPanel title="Replay Swings" subtitle="Biggest movement reconstructed from the tracked final-innings stream.">
+          <GlassPanel title="Retrospective Swings" subtitle="Biggest movement reconstructed from innings-level over, phase, and partnership analysis.">
             <InsightList items={report.retrospective.biggestSwings} tone="warning" />
           </GlassPanel>
           <GlassPanel title="Context" subtitle="What the engine wants users to remember while interpreting the swing calls.">
@@ -813,41 +816,37 @@ export default function PostMatchInsightsStory({
       id: "win-review",
       title: "Win Predictor Review",
       shortLabel: "Win Predictor Review",
-      eyebrow: "Replay story",
-      summary: "The live replay chart now lives inside a dedicated premium slide instead of being buried midway down a long page.",
-      metric: report.retrospective.analytics ? `${report.retrospective.ballsTracked} balls tracked` : "Replay unavailable",
+      eyebrow: "Retrospective model",
+      summary: "A dedicated post-match review of innings momentum, phase battles, partnerships, collapses, and pre-chase expectation.",
+      metric: summaryAnalytics ? `${summaryAnalytics.innings.length} innings modeled` : "Summary model unavailable",
       icon: Gauge,
       ringClass: "from-emerald-200 via-teal-300 to-cyan-400",
       glowClass: "from-emerald-300/30 via-teal-400/18 to-cyan-500/18",
       panelClass: "bg-[linear-gradient(180deg,rgba(7,23,24,0.98),rgba(7,11,18,0.98))]",
-      main: report.retrospective.analytics ? (
-        <GlassPanel title="Win Probability Retrospective" subtitle="Tracked final-innings replay with turning points and counterfactual context.">
-          <LiveEdaCharts
-            analytics={report.retrospective.analytics}
-            ballsTracked={report.retrospective.ballsTracked}
-            completedOvers={Math.max(Math.floor(match.score[match.score.length - 1]?.o ?? 0), 0)}
-          />
-        </GlassPanel>
+      main: summaryAnalytics ? (
+        <PostMatchSummaryCharts summaryAnalytics={summaryAnalytics} />
       ) : (
         <SpotlightMetric
-          label="Replay unavailable"
-          value="Tracking feed incomplete"
-          note="This match does not have enough preserved final-innings tracking to reconstruct the replay timeline."
+          label="Summary model unavailable"
+          value="Innings evidence incomplete"
+          note="This match does not have enough reconstructed innings evidence to build the dedicated post-match summary model."
           className="border-sky-400/15 bg-sky-400/[0.06]"
         />
       ),
       aside: (
         <div className="space-y-4">
-          <GlassPanel title="Biggest Swings" subtitle="The replay's highest-leverage moments in plain English.">
+          <GlassPanel title="Narrative Highlights" subtitle="The most decision-useful retrospective reads in plain English.">
             <InsightList items={report.retrospective.biggestSwings} tone="good" />
           </GlassPanel>
-          <GlassPanel title="Replay Notes" subtitle="Why this replay matters and what its limits are.">
+          <GlassPanel title="Model Notes" subtitle="Why this slide is a post-match summary system instead of a copied live dashboard.">
             <InsightList
               items={[
-                report.retrospective.analytics
-                  ? `Replay confidence is grounded in ${report.retrospective.ballsTracked} tracked balls from the decisive innings.`
-                  : "The replay panel is suppressed whenever there is not enough tracked live data to tell the story honestly.",
-                "The chart uses the same underlying analytics bundle already powering the current post-match page.",
+                summaryAnalytics
+                  ? `The summary model used ${report.retrospective.ballsTracked} tracked balls plus the final scorecards to rebuild innings phases, impact overs, partnerships, and collapses.`
+                  : "The retrospective model is suppressed whenever the innings evidence is too thin to tell the story honestly.",
+                predictionReview
+                  ? `Pre-chase expectation leaned ${predictionReview.expectedWinner}${predictionReview.expectedWinPct != null ? ` at ${predictionReview.expectedWinPct}%` : ""}, then the final result was checked against that expectation.`
+                  : "Prediction review is omitted unless both innings and the final result support a stable retrospective read.",
               ]}
             />
           </GlassPanel>
@@ -870,6 +869,14 @@ export default function PostMatchInsightsStory({
           <GlassPanel title="Standout Performers" subtitle="The names that bent the expected script the hardest.">
             <InsightList items={report.intel.standoutPerformers} tone="good" />
           </GlassPanel>
+          {summaryAnalytics?.hiddenContributors.length ? (
+            <GlassPanel title="Hidden Contributors" subtitle="Useful contributions that mattered without becoming the headline.">
+              <InsightList
+                items={summaryAnalytics.hiddenContributors.map((contributor) => `${contributor.name}: ${contributor.note}`)}
+                tone="neutral"
+              />
+            </GlassPanel>
+          ) : null}
           <GlassPanel title="Match Signals" subtitle="Deterministic signal cards that explain why those surprises mattered.">
             <PostMatchSignals signals={report.intel.matchSignals} />
           </GlassPanel>
@@ -880,6 +887,11 @@ export default function PostMatchInsightsStory({
           <GlassPanel title="Clutch Reads" subtitle="Compact context around the unexpected contributors.">
             <EdaCards cards={report.retrospective.advancedCards.slice(0, 3)} />
           </GlassPanel>
+          {hiddenContributor ? (
+            <GlassPanel title="Most Underrated Shift" subtitle="The cleanest hidden-value call from the retrospective model.">
+              <InsightList items={[hiddenContributor.note]} tone="good" />
+            </GlassPanel>
+          ) : null}
         </div>
       ),
     },
@@ -1222,7 +1234,7 @@ export default function PostMatchInsightsStory({
         <EdaAskPanel
           matchId={match.id}
           title="Ask The Analyst"
-          description="Use the same post-match data, commentary replay, linked coverage, and warehouse benchmarks to ask follow-up questions."
+          description="Use the same post-match scorecards, retrospective innings summaries, linked coverage, and warehouse benchmarks to ask follow-up questions."
           suggestions={[
             "What decided this match more than the raw margin suggests?",
             ...report.intel.turningPoints.slice(0, 2),

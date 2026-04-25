@@ -248,6 +248,101 @@ export interface LiveAnalyticsBundle {
   } | null;
 }
 
+export interface PostMatchOverSummary {
+  id: string;
+  inning: string;
+  team: string;
+  over: number;
+  phase: string;
+  runs: number;
+  wickets: number;
+  legalBalls: number;
+  cumulativeRuns: number;
+  cumulativeWickets: number;
+  runRate: number;
+  leverage: number;
+  note: string;
+}
+
+export interface PostMatchPhaseSummary {
+  inning: string;
+  team: string;
+  phase: string;
+  runs: number;
+  wickets: number;
+  legalBalls: number;
+  runRate: number;
+  runShare: number;
+  note: string;
+}
+
+export interface PostMatchPartnershipSummary {
+  id: string;
+  inning: string;
+  team: string;
+  pair: string;
+  runs: number;
+  balls: number;
+  wicketNumber: number;
+  startOver: number;
+  endOver: number;
+  note: string;
+}
+
+export interface PostMatchCollapsePeriod {
+  id: string;
+  inning: string;
+  team: string;
+  startOver: number;
+  endOver: number;
+  wickets: number;
+  runs: number;
+  legalBalls: number;
+  note: string;
+}
+
+export interface PostMatchContributorSummary {
+  id: string;
+  name: string;
+  team: string;
+  metric: string;
+  note: string;
+}
+
+export interface PostMatchPredictionReview {
+  expectedWinner: string;
+  actualWinner: string | null;
+  expectedWinPct: number | null;
+  aligned: boolean;
+  note: string;
+}
+
+export interface PostMatchInningsAnalytics {
+  inning: string;
+  team: string;
+  overSummaries: PostMatchOverSummary[];
+  phaseStats: PostMatchPhaseSummary[];
+  topPartnerships: PostMatchPartnershipSummary[];
+  collapsePeriods: PostMatchCollapsePeriod[];
+  highestImpactOver: PostMatchOverSummary | null;
+  bestBattingPhase: PostMatchPhaseSummary | null;
+  powerplay: PostMatchPhaseSummary | null;
+  deathOvers: PostMatchPhaseSummary | null;
+}
+
+export interface PostMatchSummaryAnalytics {
+  innings: PostMatchInningsAnalytics[];
+  bestBattingPhase: PostMatchPhaseSummary | null;
+  worstBowlingPhase: PostMatchPhaseSummary | null;
+  highestImpactOver: PostMatchOverSummary | null;
+  decisivePartnership: PostMatchPartnershipSummary | null;
+  biggestCollapse: PostMatchCollapsePeriod | null;
+  topPerformers: PostMatchContributorSummary[];
+  hiddenContributors: PostMatchContributorSummary[];
+  predictionReview: PostMatchPredictionReview | null;
+  narrativeHighlights: string[];
+}
+
 export interface LiveEdaReport {
   match: Match;
   snapshot: LivePressureSnapshot;
@@ -269,8 +364,8 @@ export interface PostMatchEdaReport {
   benchmarkCards: PostMatchEdaCard[];
   retrospective: {
     summary: string;
-    analytics: LiveAnalyticsBundle | null;
     ballsTracked: number;
+    summaryAnalytics: PostMatchSummaryAnalytics | null;
     matchSummaryCards: PostMatchEdaCard[];
     battingCards: PostMatchEdaCard[];
     bowlingCards: PostMatchEdaCard[];

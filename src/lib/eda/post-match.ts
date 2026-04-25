@@ -5,6 +5,7 @@ import {
   buildConfidence,
   buildFreshness,
   buildMetricQuality,
+  clamp,
   dedupeSources,
   round,
   shrinkRate,
@@ -14,11 +15,10 @@ import {
   getTeamFormSnapshot,
   getVenueSnapshot,
 } from "@/lib/eda/historical";
-import { buildLiveAnalyticsBundle } from "@/lib/eda/live-analytics";
-import { deriveLivePressureSnapshot } from "@/lib/eda/live";
-import type { BallByBall, Match, PostMatchEdaCard, Scorecard } from "@/types/cricket";
+import { buildPostMatchSummaryAnalytics } from "@/lib/eda/post-match-summary";
+import type { Match, PostMatchEdaCard, Scorecard } from "@/types/cricket";
 import type { InsightsEvaluationResponse } from "@/types/insights";
-import type { LiveAnalyticsBundle, PostMatchEdaReport } from "@/types/eda";
+import type { PostMatchEdaReport } from "@/types/eda";
 import type { MetricUncertainty } from "@/types/metrics";
 
 function formatMetricInterval(interval?: MetricUncertainty | null) {
@@ -74,74 +74,6 @@ function parseMargin(status: string) {
   return match?.[1]?.trim() ?? null;
 }
 
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function groupOverStats(balls: BallByBall[]) {
-  const map = new Map<number, { over: number; runs: number; wickets: number; legalBalls: number }>();
-  for (const ball of balls) {
-    const current = map.get(ball.over) ?? { over: ball.over, runs: 0, wickets: 0, legalBalls: 0 };
-    current.runs += ball.score;
-    current.wickets += ball.isWicket ? 1 : 0;
-    current.legalBalls += ball.legalBall === false ? 0 : 1;
-    map.set(ball.over, current);
-  }
-  return [...map.values()].sort((left, right) => left.over - right.over);
-}
-
-function phaseLabel(over: number) {
-  if (over < 6) return "Powerplay";
-  if (over < 16) return "Middle";
-  return "Death";
-}
-
-function buildPhaseStats(balls: BallByBall[]) {
-  const phases = new Map<string, { runs: number; wickets: number; legalBalls: number }>();
-  for (const ball of balls) {
-    const label = phaseLabel(ball.over);
-    const current = phases.get(label) ?? { runs: 0, wickets: 0, legalBalls: 0 };
-    current.runs += ball.score;
-    current.wickets += ball.isWicket ? 1 : 0;
-    current.legalBalls += ball.legalBall === false ? 0 : 1;
-    phases.set(label, current);
-  }
-
-  return ["Powerplay", "Middle", "Death"].map((label) => {
-    const value = phases.get(label) ?? { runs: 0, wickets: 0, legalBalls: 0 };
-    return {
-      label,
-      runs: value.runs,
-      wickets: value.wickets,
-      legalBalls: value.legalBalls,
-      runRate: value.legalBalls > 0 ? round((value.runs * 6) / value.legalBalls, 2) : 0,
-    };
-  });
-}
-
-function bestWicketCluster(balls: BallByBall[]) {
-  const wicketIndexes = balls
-    .filter((ball) => ball.isWicket)
-    .map((ball) => ball.over * 6 + ball.ball);
-
-  if (wicketIndexes.length === 0) {
-    return null;
-  }
-
-  let best = 1;
-  for (let start = 0; start < wicketIndexes.length; start += 1) {
-    let count = 1;
-    for (let next = start + 1; next < wicketIndexes.length; next += 1) {
-      if (wicketIndexes[next] - wicketIndexes[start] <= 12) {
-        count += 1;
-      }
-    }
-    best = Math.max(best, count);
-  }
-
-  return best;
-}
-
 function buildCard(
   id: string,
   label: string,
@@ -180,14 +112,14 @@ async function getEvaluationSummary(): Promise<InsightsEvaluationResponse["summa
 
 function buildRetrospectiveSummary(match: Match, winner: string | null, margin: string | null, topSwing: string | null) {
   if (winner && margin) {
-    return `${winner} won by ${margin}. ${topSwing ? `${topSwing} was the sharpest swing in the tracked final-innings replay.` : "The scorecard and final-innings replay agree on the decisive pressure moments."}`;
+    return `${winner} won by ${margin}. ${topSwing ? `${topSwing} was the decisive passage in the retrospective innings review.` : "The scorecard, phase battle, and over-impact review agree on the decisive pressure moments."}`;
   }
 
   if (winner) {
-    return `${winner} finished on top. ${topSwing ? `${topSwing} was the clearest tracked turning point.` : "This retrospective combines the final scorecard with the tracked final-innings replay."}`;
+    return `${winner} finished on top. ${topSwing ? `${topSwing} was the clearest turning point in the retrospective innings review.` : "This retrospective combines the final scorecard with a dedicated post-match innings model."}`;
   }
 
-  return `${match.name} is being read through scorecard, historical benchmark, and tracked final-innings analytics.`;
+  return `${match.name} is being read through scorecard evidence, historical benchmarks, and a dedicated post-match innings summary model.`;
 }
 
 function inningsTeamName(summaryInning: string) {
@@ -307,24 +239,20 @@ export async function buildPostMatchEdaReport(
   ];
 
   const retrospectiveWarnings: string[] = [];
-  let retrospectiveAnalytics: LiveAnalyticsBundle | null = null;
   const ballsTracked = commentary?.bbb.length ?? 0;
+  const summaryAnalytics = buildPostMatchSummaryAnalytics({
+    match,
+    scorecards,
+    commentaryBalls: commentary?.bbb ?? [],
+    venueAvgFirstInnings: venue.avgFirstInningsScore,
+    venueChaseWinPct: venue.chaseWinPct,
+  });
 
-  try {
-    if (commentary?.bbb.length) {
-      const snapshot = deriveLivePressureSnapshot(match);
-      retrospectiveAnalytics = buildLiveAnalyticsBundle({
-        match,
-        commentaryBalls: commentary.bbb,
-        scorecards,
-        snapshot,
-        venue,
-      });
-    } else {
-      retrospectiveWarnings.push("Ball-by-ball commentary was unavailable, so the retrospective replay is limited to scorecard analytics.");
-    }
-  } catch {
-    retrospectiveWarnings.push("Final-innings replay could not be reconstructed cleanly from the available live feed.");
+  if (!commentary?.bbb.length) {
+    retrospectiveWarnings.push("Ball-by-ball commentary was unavailable, so over-by-over and partnership storytelling is limited to scorecard evidence.");
+  }
+  if (!summaryAnalytics) {
+    retrospectiveWarnings.push("Retrospective innings analytics could not be reconstructed cleanly from the available score flow.");
   }
 
   const decisiveInnings =
@@ -336,19 +264,24 @@ export async function buildPostMatchEdaReport(
     decisiveInnings
       ? (scorecards ?? []).find((card) => card.inning === decisiveInnings.inning) ?? null
       : null;
-  const overStats = groupOverStats(commentary?.bbb ?? []);
-  const phaseStats = buildPhaseStats(commentary?.bbb ?? []);
-  const topTurningBall = retrospectiveAnalytics?.topTurningBalls[0] ?? null;
-  const topTurningOver = retrospectiveAnalytics?.topTurningOvers[0] ?? null;
-  const bestCluster = bestWicketCluster(commentary?.bbb ?? []);
-  const bestControlOver = overStats.length > 0 ? [...overStats].sort((left, right) => left.runs - right.runs)[0] : null;
-  const mostExpensiveOver = overStats.length > 0 ? [...overStats].sort((left, right) => right.runs - left.runs)[0] : null;
+  const decisiveInningsAnalytics =
+    decisiveInnings && summaryAnalytics
+      ? summaryAnalytics.innings.find((inning) => inning.inning === decisiveInnings.inning) ?? null
+      : null;
+  const allOverSummaries = summaryAnalytics?.innings.flatMap((inning) => inning.overSummaries) ?? [];
+  const bestControlOver = allOverSummaries.length > 0 ? [...allOverSummaries].sort((left, right) => left.runs - right.runs)[0] : null;
+  const mostExpensiveOver = allOverSummaries.length > 0 ? [...allOverSummaries].sort((left, right) => right.runs - left.runs)[0] : null;
   const anchorRuns = decisiveScorecard ? decisiveScorecard.batting.slice(0, 4).reduce((sum, entry) => sum + entry.r, 0) : 0;
   const finisherRuns = decisiveScorecard ? decisiveScorecard.batting.slice(4).reduce((sum, entry) => sum + entry.r, 0) : 0;
   const totalBattingRuns = anchorRuns + finisherRuns;
-  const topBatterImpact = retrospectiveAnalytics?.batterImpact[0] ?? null;
-  const topBowlerImpact = retrospectiveAnalytics?.bowlerRunsSaved[0] ?? retrospectiveAnalytics?.bowlerImpact[0] ?? null;
-  const topMatchup = retrospectiveAnalytics?.matchupMatrix[0] ?? null;
+  const bestBattingPhase = summaryAnalytics?.bestBattingPhase ?? decisiveInningsAnalytics?.bestBattingPhase ?? null;
+  const worstBowlingPhase = summaryAnalytics?.worstBowlingPhase ?? null;
+  const decisivePartnership = summaryAnalytics?.decisivePartnership ?? null;
+  const biggestCollapse = summaryAnalytics?.biggestCollapse ?? null;
+  const highestImpactOver = summaryAnalytics?.highestImpactOver ?? null;
+  const topPerformer = summaryAnalytics?.topPerformers[0] ?? null;
+  const hiddenContributor = summaryAnalytics?.hiddenContributors[0] ?? null;
+  const predictionReview = summaryAnalytics?.predictionReview ?? null;
   const tacticalLeak = intel.matchSignals.find((signal) => signal.id === "signal-extras");
 
   const matchSummaryCards: PostMatchEdaCard[] = [
@@ -369,9 +302,9 @@ export async function buildPostMatchEdaReport(
     buildCard(
       "turning-point",
       "Turning point",
-      topTurningBall?.label ?? "Waiting",
-      topTurningBall?.note ?? "The live replay needs tracked ball state before the biggest swing can be isolated.",
-      { tone: topTurningBall ? "good" : "warning", sampleSize: ballsTracked }
+      highestImpactOver ? `Over ${highestImpactOver.over + 1}` : "Waiting",
+      highestImpactOver?.note ?? "The innings model needs tracked over flow before the highest-impact passage can be isolated.",
+      { tone: highestImpactOver ? "good" : "warning", sampleSize: ballsTracked }
     ),
   ];
 
@@ -386,20 +319,22 @@ export async function buildPostMatchEdaReport(
       { tone: finisherRuns >= anchorRuns * 0.45 ? "good" : "neutral", sampleSize: decisiveScorecard?.batting.length ?? 0 }
     ),
     buildCard(
-      "powerplay-rate",
-      "Powerplay tempo",
-      phaseStats[0].legalBalls > 0 ? `${phaseStats[0].runRate} rpo` : "Waiting",
-      phaseStats[0].legalBalls > 0
-        ? `Powerplay output was ${phaseStats[0].runs}/${phaseStats[0].wickets} in ${phaseStats[0].legalBalls} balls.`
-        : "Tracked powerplay replay was unavailable for the final innings.",
-      { tone: phaseStats[0].runRate >= 8 ? "good" : "neutral", sampleSize: phaseStats[0].legalBalls }
+      "best-batting-phase",
+      "Best batting phase",
+      bestBattingPhase ? `${bestBattingPhase.phase} · ${bestBattingPhase.runRate} rpo` : "Waiting",
+      bestBattingPhase
+        ? `${bestBattingPhase.team} scored ${bestBattingPhase.runs}/${bestBattingPhase.wickets} in the ${bestBattingPhase.phase.toLowerCase()} and won the phase battle at ${bestBattingPhase.runRate} rpo.`
+        : "Phase-level batting comparison becomes available once over-by-over scoring can be reconstructed.",
+      { tone: bestBattingPhase ? "good" : "neutral", sampleSize: bestBattingPhase?.legalBalls ?? 0 }
     ),
     buildCard(
-      "pressure-batter",
-      "Pressure scorer",
-      topBatterImpact ? `${topBatterImpact.label} ${topBatterImpact.delta >= 0 ? "+" : ""}${topBatterImpact.delta}` : "Waiting",
-      topBatterImpact ? topBatterImpact.note : "Pressure scoring becomes available once batter-level live replay is available.",
-      { tone: topBatterImpact && topBatterImpact.delta > 0 ? "good" : "neutral", sampleSize: topBatterImpact?.sample ?? ballsTracked }
+      "decisive-partnership",
+      "Key partnership",
+      decisivePartnership ? `${decisivePartnership.runs} runs` : "Waiting",
+      decisivePartnership
+        ? decisivePartnership.note
+        : "Partnership tracking becomes available once ball-by-ball sequencing is available.",
+      { tone: decisivePartnership && decisivePartnership.runs >= 40 ? "good" : "neutral", sampleSize: decisivePartnership?.balls ?? ballsTracked }
     ),
   ];
 
@@ -411,48 +346,46 @@ export async function buildPostMatchEdaReport(
       bestControlOver
         ? `The most restrictive tracked over leaked only ${bestControlOver.runs} runs and produced ${bestControlOver.wickets} wickets.`
         : "Control-over detection needs tracked live over data.",
-      { tone: bestControlOver && bestControlOver.runs <= 4 ? "good" : "neutral", sampleSize: overStats.length }
+      { tone: bestControlOver && bestControlOver.runs <= 4 ? "good" : "neutral", sampleSize: allOverSummaries.length }
     ),
     buildCard(
-      "wicket-cluster",
-      "Wicket cluster",
-      bestCluster ? `${bestCluster} in 12 balls` : "Waiting",
-      bestCluster
-        ? `The sharpest wicket burst produced ${bestCluster} wickets inside a 12-ball window.`
-        : "No tracked wicket cluster was available from the final-innings replay.",
-      { tone: bestCluster && bestCluster >= 2 ? "good" : "neutral", sampleSize: ballsTracked }
+      "collapse-window",
+      "Collapse spell",
+      biggestCollapse ? `${biggestCollapse.wickets} wkts / ${biggestCollapse.runs} runs` : "Waiting",
+      biggestCollapse
+        ? biggestCollapse.note
+        : "No meaningful collapse spell was isolated from the innings flow.",
+      { tone: biggestCollapse && biggestCollapse.wickets >= 2 ? "good" : "neutral", sampleSize: biggestCollapse?.legalBalls ?? ballsTracked }
     ),
     buildCard(
-      "expensive-over",
-      "Expensive over",
-      mostExpensiveOver ? `Over ${mostExpensiveOver.over + 1} · ${mostExpensiveOver.runs}` : "Waiting",
-      mostExpensiveOver
-        ? `The most expensive tracked over leaked ${mostExpensiveOver.runs} runs and shifted the tempo visibly.`
-        : "Expensive-over detection needs tracked over-level replay.",
-      { tone: mostExpensiveOver && mostExpensiveOver.runs >= 15 ? "warning" : "neutral", sampleSize: overStats.length }
+      "worst-bowling-phase",
+      "Worst bowling phase",
+      worstBowlingPhase ? `${worstBowlingPhase.phase} · ${worstBowlingPhase.runRate} rpo` : "Waiting",
+      worstBowlingPhase
+        ? `${worstBowlingPhase.team} forced the opposition to absorb their heaviest bowling damage in the ${worstBowlingPhase.phase.toLowerCase()}, where scoring ran at ${worstBowlingPhase.runRate} rpo.`
+        : "Worst bowling phase becomes available once phase splits are reconstructed.",
+      { tone: worstBowlingPhase ? "warning" : "neutral", sampleSize: worstBowlingPhase?.legalBalls ?? 0 }
     ),
   ];
 
   const advancedCards: PostMatchEdaCard[] = [
     buildCard(
       "clutch-performer",
-      "Clutch performer",
-      intel.standoutPerformers[0] ?? "Waiting",
-      topTurningBall
-        ? `The replay's biggest swing and the scorecard leaders point to ${intel.standoutPerformers[0] ?? "the same performer"} as the clutch influence.`
-        : "Clutch read combines turning points with scorecard impact once the tracked replay is available.",
-      { tone: intel.standoutPerformers[0] ? "good" : "neutral", sampleSize: ballsTracked || intel.standoutPerformers.length }
+      "Top performer",
+      topPerformer?.name ?? intel.standoutPerformers[0] ?? "Waiting",
+      topPerformer?.note ?? "Top performer combines scorecard leaders with phase and over impact once the innings model is available.",
+      { tone: topPerformer ? "good" : "neutral", sampleSize: ballsTracked || intel.standoutPerformers.length }
     ),
     buildCard(
-      "over-vs-expected",
-      "Overperformance vs expected",
-      topBatterImpact ? `${topBatterImpact.label} ${topBatterImpact.delta >= 0 ? "+" : ""}${topBatterImpact.delta}` : "Waiting",
-      topBatterImpact
-        ? `${topBatterImpact.label} outperformed the live context by ${topBatterImpact.delta} runs.`
-        : topBowlerImpact
-          ? `${topBowlerImpact.label} beat the live expectation by ${Math.abs(topBowlerImpact.delta)} runs saved.`
-          : "Expected-vs-actual deltas need tracked live replay.",
-      { tone: topBatterImpact && topBatterImpact.delta > 0 ? "good" : "neutral", sampleSize: topBatterImpact?.sample ?? topBowlerImpact?.sample ?? ballsTracked }
+      "prediction-review",
+      "Predicted vs actual",
+      predictionReview
+        ? `${predictionReview.expectedWinner}${predictionReview.expectedWinPct != null ? ` ${predictionReview.expectedWinPct}%` : ""}`
+        : "Waiting",
+      predictionReview
+        ? `${predictionReview.note} Actual winner: ${predictionReview.actualWinner ?? "waiting"}.`
+        : "Prediction review becomes available once both innings and the result are settled.",
+      { tone: predictionReview?.aligned ? "good" : predictionReview ? "warning" : "neutral", sampleSize: venue.chaseSampleSize ?? venue.sampleSize }
     ),
     buildCard(
       "tactical-leak",
@@ -462,13 +395,11 @@ export async function buildPostMatchEdaReport(
       { tone: tacticalLeak?.tone ?? "neutral", sampleSize: tacticalLeak?.quality?.sampleSize ?? intel.inningsSummaries.length }
     ),
     buildCard(
-      "matchup-win",
-      "Matchup win/loss",
-      topMatchup ? `${topMatchup.batter} vs ${topMatchup.bowler}` : "Waiting",
-      topMatchup
-        ? `${topMatchup.batter} scored ${topMatchup.runs} from ${topMatchup.balls} tracked balls against ${topMatchup.bowler}, with strike rate ${topMatchup.strikeRate}.`
-        : "Tracked batter-versus-bowler matchup edges were unavailable.",
-      { tone: topMatchup && topMatchup.threat >= 0 ? "good" : "neutral", sampleSize: topMatchup?.balls ?? ballsTracked }
+      "hidden-contributor",
+      "Hidden contributor",
+      hiddenContributor?.name ?? "Waiting",
+      hiddenContributor?.note ?? "Hidden contributors appear once the full scorecard and innings model can separate headline stars from supporting value.",
+      { tone: hiddenContributor ? "good" : "neutral", sampleSize: ballsTracked || intel.battingLeaders.length + intel.bowlingLeaders.length }
     ),
   ];
 
@@ -553,24 +484,24 @@ export async function buildPostMatchEdaReport(
       score: clamp(
         55 +
           (bestControlOver ? Math.max(0, 8 - bestControlOver.runs) * 4 : 0) +
-          (bestCluster ? bestCluster * 6 : 0) -
+          (biggestCollapse ? biggestCollapse.wickets * 6 : 0) -
           (mostExpensiveOver ? Math.max(0, mostExpensiveOver.runs - 12) * 2 : 0),
         0,
         100
       ),
-      insight: "Bowling rating blends control-over quality, wicket clustering, and how expensive the worst leak became.",
+      insight: "Bowling rating blends control-over quality, collapse pressure created, and how expensive the worst leak became.",
     },
     {
       label: "Captaincy / tactics rating",
       score: clamp(
         52 +
-          (topTurningOver ? 8 : 0) +
+          (highestImpactOver ? 8 : 0) +
           (tacticalLeak?.tone === "warning" ? -6 : 4) +
-          (topMatchup ? 6 : 0),
+          (predictionReview?.aligned ? 6 : 0),
         0,
         100
       ),
-      insight: "Tactics rating blends turning-point control, matchup wins, and pressure leaks such as extras or boundary dependence.",
+      insight: "Tactics rating blends control over decisive passages, prediction alignment, and pressure leaks such as extras or boundary dependence.",
     },
   ];
 
@@ -578,7 +509,7 @@ export async function buildPostMatchEdaReport(
     match,
     winner,
     margin,
-    topTurningBall?.label ?? topTurningOver?.label ?? null
+    highestImpactOver ? `Over ${highestImpactOver.over + 1} for ${highestImpactOver.team}` : null
   );
 
   const reasons = [
@@ -586,7 +517,7 @@ export async function buildPostMatchEdaReport(
     venue.available ? "Historical venue benchmarking was available." : "Historical venue benchmarking was limited.",
     headToHead.available ? "Head-to-head context was available." : "Head-to-head context was limited.",
     winnerForm?.available ? "Winner form was available in the warehouse." : "Winner form was limited in the warehouse.",
-    commentary?.bbb.length ? "Final-innings ball-by-ball replay was available." : "Final-innings ball-by-ball replay was unavailable.",
+    commentary?.bbb.length ? "Ball-by-ball innings sequencing was available for retrospective reconstruction." : "Ball-by-ball innings sequencing was unavailable.",
   ];
 
   return {
@@ -595,15 +526,13 @@ export async function buildPostMatchEdaReport(
     benchmarkCards,
     retrospective: {
       summary: retrospectiveSummary,
-      analytics: retrospectiveAnalytics,
       ballsTracked,
+      summaryAnalytics,
       matchSummaryCards,
       battingCards,
       bowlingCards,
       advancedCards,
-      biggestSwings: [
-        topTurningBall ? `${topTurningBall.label}: ${topTurningBall.note}` : "No ball-level swing was isolated from the available replay.",
-        topTurningOver ? `${topTurningOver.label}: ${topTurningOver.note}` : "No over-level swing was isolated from the available replay.",
+      biggestSwings: summaryAnalytics?.narrativeHighlights ?? [
         decisiveInnings ? `${decisiveInnings.inning} ran at ${decisiveInnings.runRate} rpo with ${decisiveInnings.boundaryPct}% boundary dependence.` : "Decisive innings fingerprint was unavailable.",
       ],
       recommendationReviewCards,
@@ -633,7 +562,7 @@ export async function buildPostMatchEdaReport(
       match,
       historicalAvailable: venue.available || headToHead.available || Boolean(winnerForm?.available),
       notes: [
-        "Post-match EDA is deterministic first, with retrospective replay limited to tracked final-innings live data when available.",
+        "Post-match EDA uses a dedicated retrospective innings model with phase, over, partnership, collapse, and prediction-review summaries rather than the live dashboard pipeline.",
       ],
     }),
     sources: dedupeSources([
@@ -658,10 +587,10 @@ export async function buildPostMatchEdaReport(
       {
         id: "postmatch-replay",
         type: "sportmonks" as const,
-        title: "Final-innings replay",
+        title: "Retrospective innings sequencing",
         note: commentary?.bbb.length
-          ? `${commentary.bbb.length} tracked balls powered the retrospective replay charts.`
-          : "Ball-by-ball replay was unavailable for this report.",
+          ? `${commentary.bbb.length} tracked balls powered the post-match phase, over, partnership, and collapse summaries.`
+          : "Ball-by-ball sequencing was unavailable for this report.",
       },
       {
         id: "postmatch-engine-eval",

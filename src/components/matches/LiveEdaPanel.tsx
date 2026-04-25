@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useEffectEvent, useState } from "react";
 import { Activity, Loader2, TriangleAlert } from "lucide-react";
 import EdaCards from "@/components/matches/EdaCards";
 import LiveEdaCharts from "@/components/matches/LiveEdaCharts";
-import type { LiveEdaReport } from "@/types/eda";
+import { useLiveEdaReport } from "@/hooks/useLiveEdaReport";
 import { LIVE_EDA_POLL_INTERVAL_SECONDS } from "@/lib/eda/live";
 
 type LiveEdaPanelProps = {
@@ -12,69 +11,12 @@ type LiveEdaPanelProps = {
   enabled: boolean;
 };
 
-async function readJson<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
-  const response = await fetch(input, init);
-  const payload = (await response.json().catch(() => null)) as
-    | { error?: string; detail?: string }
-    | null;
-
-  if (!response.ok) {
-    throw new Error(payload?.error || payload?.detail || "Request failed");
-  }
-
-  return payload as T;
-}
-
 export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
-  const [report, setReport] = useState<LiveEdaReport | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const loadReport = useEffectEvent(async (signal?: AbortSignal) => {
-    setLoading(true);
-
-    try {
-      const payload = await readJson<LiveEdaReport>(`/api/eda/live?matchId=${encodeURIComponent(matchId)}`, {
-        cache: "no-store",
-        signal,
-      });
-
-      setReport(payload);
-      setError(null);
-    } catch (requestError) {
-      if (requestError instanceof Error && requestError.name === "AbortError") return;
-      setError(requestError instanceof Error ? requestError.message : "Unable to load live intelligence right now.");
-    } finally {
-      setLoading(false);
-    }
+  const { report, error, isLoading, isRefreshing } = useLiveEdaReport({
+    matchId,
+    enabled,
+    pollIntervalSeconds: LIVE_EDA_POLL_INTERVAL_SECONDS,
   });
-
-  useEffect(() => {
-    if (!enabled) {
-      setReport(null);
-      setError(null);
-      setLoading(false);
-      return;
-    }
-
-    const controller = new AbortController();
-    void loadReport(controller.signal);
-
-    return () => {
-      controller.abort();
-    };
-  }, [enabled, matchId]);
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const interval = window.setInterval(() => {
-      void loadReport();
-    }, LIVE_EDA_POLL_INTERVAL_SECONDS * 1000);
-
-    return () => {
-      window.clearInterval(interval);
-    };
-  }, [enabled, matchId]);
 
   if (!enabled) {
     return (
@@ -96,13 +38,17 @@ export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
               <Activity size={16} />
             </span>
             <h3 className="text-lg font-bold text-white">Live Intelligence</h3>
+            <span className="inline-flex items-center gap-1 rounded-full border border-red-500/20 bg-red-500/10 px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-red-200">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-300 animate-pulse" />
+              Live
+            </span>
           </div>
           <p className="mt-2 text-sm text-gray-400">
-            Deterministic live pressure analysis with venue context, plus the specialist T20 advisor when it is available.
+            Real-time command-center analytics refreshed every 15 seconds from the latest live score state, commentary flow, and venue context.
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-gray-400">
-          {loading ? <Loader2 size={14} className="animate-spin" /> : null}
+          {isRefreshing ? <Loader2 size={14} className="animate-spin" /> : null}
           <span className="rounded-full bg-white/5 px-3 py-1.5">
             Auto-refresh every {report?.pollIntervalSeconds ?? LIVE_EDA_POLL_INTERVAL_SECONDS}s
           </span>
@@ -125,7 +71,7 @@ export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
         </p>
       ) : null}
 
-      {!report && !loading ? (
+      {!report && !isLoading ? (
         <div className="mt-4 rounded-lg border border-gray-800 bg-cg-dark px-4 py-4 text-sm text-gray-400">
           Waiting for the current live state to generate the first EDA snapshot.
         </div>
@@ -133,21 +79,55 @@ export default function LiveEdaPanel({ matchId, enabled }: LiveEdaPanelProps) {
 
       {report ? (
         <div className="mt-5 space-y-5">
-          <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
-            <p className="text-sm leading-7 text-gray-200">{report.summary}</p>
-            <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-400">
-              <span className="rounded-full bg-white/5 px-3 py-1.5">
-                Phase {report.snapshot.phase}
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.25fr)_minmax(270px,0.75fr)]">
+            <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
+              <p className="text-sm leading-7 text-gray-200">{report.summary}</p>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-gray-400">
+                <span className="rounded-full bg-white/5 px-3 py-1.5">
+                  Phase {report.snapshot.phase}
+                </span>
+                <span className="rounded-full bg-white/5 px-3 py-1.5">
+                  {report.snapshot.battingTeam} {report.snapshot.runs}/{report.snapshot.wickets}
+                </span>
+                <span className="rounded-full bg-white/5 px-3 py-1.5">
+                  Generated {new Date(report.freshness.generatedAt).toLocaleTimeString("en-IN", {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    timeZone: "Asia/Kolkata",
+                  })}
+                </span>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-3 lg:grid-cols-1">
+              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Current rate</p>
+                <p className="mt-2 text-2xl font-black text-white">{report.snapshot.currentRunRate}</p>
+                <p className="mt-2 text-xs text-gray-400">Scoring tempo right now</p>
+              </div>
+              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Pressure</p>
+                <p className="mt-2 text-2xl font-black text-white">{report.snapshot.pressureIndex}</p>
+                <p className="mt-2 text-xs text-gray-400">Live scoreboard squeeze</p>
+              </div>
+              <div className="rounded-lg border border-gray-800 bg-cg-dark px-4 py-4">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-gray-500">Required rate</p>
+                <p className="mt-2 text-2xl font-black text-white">{report.snapshot.requiredRunRate ?? "NA"}</p>
+                <p className="mt-2 text-xs text-gray-400">Only active in a chase</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-cg-green/20 bg-cg-green/[0.06] px-4 py-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-cg-green">
+              <span className="rounded-full border border-cg-green/20 bg-black/20 px-3 py-1.5 font-semibold uppercase tracking-[0.18em]">
+                Real-time mode
               </span>
               <span className="rounded-full bg-white/5 px-3 py-1.5">
-                {report.snapshot.battingTeam} {report.snapshot.runs}/{report.snapshot.wickets}
+                Updates every {report.pollIntervalSeconds}s
               </span>
               <span className="rounded-full bg-white/5 px-3 py-1.5">
-                Generated {new Date(report.freshness.generatedAt).toLocaleTimeString("en-IN", {
-                  hour: "2-digit",
-                  minute: "2-digit",
-                  timeZone: "Asia/Kolkata",
-                })}
+                Recomputes cards, charts, and tactical context on each cycle
               </span>
             </div>
           </div>
